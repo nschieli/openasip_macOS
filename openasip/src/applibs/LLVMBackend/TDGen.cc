@@ -1064,9 +1064,18 @@ TDGen::write32bitRegisterInfo(std::ostream& o) {
     }
 
     // Generate data structure that contain registers grouped by their
-    // physical RFs
+    // physical RFs.
+    // The first GP register (index 4) is named IRES1 — it pairs with
+    // IRES0 to form an i64 return value on 32-bit targets.
+    bool ires1Named = false;
     for (; i < regs32bit_.size(); i++) {
-        std::string regName = "I" + Conversion::toString(i);
+        std::string regName;
+        if (!ires1Named && !mach_.is64bit()) {
+            regName = "IRES1";
+            ires1Named = true;
+        } else {
+            regName = "I" + Conversion::toString(i);
+        }
         writeRegisterDef(o, regs32bit_[i], regName, "R32", "", GPR);
 
         if (!regsInRFClasses_.count(regs32bit_[i].rf)) {
@@ -1092,7 +1101,7 @@ TDGen::write32bitRegisterInfo(std::ostream& o) {
         }
     
         // Bypass register class
-        o << "def R32_ByPass_Regs : RegisterClass<\"TCE\", [i32,f32,f16], 32, (add ";
+        o << "def R32_ByPass_Regs : RegisterClass<\"TCE\", [i32,i1,f32,f16], 32, (add ";
         for (size_t j = 0; j < 256; ++j) {
             std::string regName = "BP" + Conversion::toString(j);
             
@@ -1417,7 +1426,7 @@ TDGen::write64bitRegisterInfo(std::ostream& o) {
         }
     
         // Bypass register class
-        o << "def R64_ByPass_Regs : RegisterClass<\"TCE\", [i64,i32,f64,f32,f16], 64, (add ";
+        o << "def R64_ByPass_Regs : RegisterClass<\"TCE\", [i64,i32,i1,f64,f32,f16], 64, (add ";
         for (size_t j = 0; j < 256; ++j) {
             std::string regName = "BP" + Conversion::toString(j);
             
@@ -6872,6 +6881,11 @@ TDGen::writeCallingConv(std::ostream& os) {
     } else {
         os << "  CCIfType<[i1], CCPromoteToType<i32>>," << endl;
         os << "  CCIfType<[i32], CCAssignToReg<[IRES0]>>," << endl;
+        // i64 return: use register pair IRES0 (low) + IRES1 (high)
+        if (regs32bit_.size() > 4) {
+            os << "  CCIfType<[i64], CCAssignToRegWithShadow<"
+               << "[IRES0, IRES1], [IRES1, IRES0]>>," << endl;
+        }
     }
 
     os << "  CCIfType<[f16], CCAssignToReg<[IRES0]>>," << endl
@@ -6911,8 +6925,13 @@ TDGen::writeCallingConv(std::ostream& os) {
         }
 
     } else {
-        os << "  CCIfType<[i1, i8, i16], CCPromoteToType<i32>>," << endl
-           << "  CCIfType<[i32], CCAssignToReg<[IRES0]>>," << endl << endl;
+        os << "  CCIfType<[i1, i8, i16], CCPromoteToType<i32>>," << endl;
+        // i64 args: split into register pair IRES0 (low) + IRES1 (high)
+        if (regs32bit_.size() > 4) {
+            os << "  CCIfType<[i64], CCAssignToRegWithShadow<"
+               << "[IRES0, IRES1], [IRES1, IRES0]>>," << endl;
+        }
+        os << "  CCIfType<[i32], CCAssignToReg<[IRES0]>>," << endl << endl;
 
         for (unsigned int i = 4; i < (3 + argRegCount_); i++) {
             os << "  CCIfType<[i32], CCAssignToReg<[A" << i << "]>>," << endl;
@@ -6927,8 +6946,10 @@ TDGen::writeCallingConv(std::ostream& os) {
            << endl << endl;
     } else {
         os << "  // Integer values get stored in stack slots that are" << endl
-           << "  // 4 bytes insize and 4-byte aligned." << endl
-           << "  CCIfType<[i32, f32], CCAssignToStack<4, 4>>," << endl << endl;
+           << "  // 4 bytes in size and 4-byte aligned." << endl
+           << "  CCIfType<[i32, f32], CCAssignToStack<4, 4>>," << endl
+           << "  // i64 values need 8-byte stack slots" << endl
+           << "  CCIfType<[i64], CCAssignToStack<8, 8>>," << endl << endl;
     }
     os << "  // Double values get stored in stack slots that are" << endl
        << "  // 8 bytes in size and 8-byte aligned." << endl
@@ -7402,8 +7423,8 @@ void TDGen::createSelectPatterns(std::ostream& os) {
 	    os << "}" << std::endl << std::endl;
 
 	    if (mach_.is64bit()) {
-		os << "def : Pat<(i64 (select R64IRegs:$c, R64IRegs:$T, R64IRegs:$F)),"
-		   << "(SELECT_I64rr (MOVI64I1ss R64Regs:$c),"
+		os << "def : Pat<(i64 (select R1Regs:$c, R64IRegs:$T, R64IRegs:$F)),"
+		   << "(SELECT_I64rr R1Regs:$c,"
 		   << "R64IRegs:$T, R64IRegs:$F)>;"
 		   << std::endl << std::endl;
 	    }

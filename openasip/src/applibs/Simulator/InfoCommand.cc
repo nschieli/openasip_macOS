@@ -32,10 +32,13 @@
  * @note rating: red
  */
 
+#include <algorithm>
+#include <cstdint>
 #include <iomanip>
 #include <set>
 #include <string>
 #include <sstream>
+#include <vector>
 
 #include "CompilerWarnings.hh"
 IGNORE_CLANG_WARNING("-Wkeyword-macro")
@@ -77,6 +80,8 @@ POP_CLANG_DIAGS
 #include "BusState.hh"
 #include "ControlUnit.hh"
 #include "UtilizationStats.hh"
+#include "OperationNGramTracker.hh"
+#include "FunctionCyclesTracker.hh"
 #include "SimulationStatisticsCalculator.hh"
 #include "HWOperation.hh"
 #include "UniversalFunctionUnit.hh"
@@ -85,6 +90,280 @@ POP_CLANG_DIAGS
 #include "LongImmediateRegisterState.hh"
 
 using std::string;
+
+namespace {
+
+/**
+ * Writes bigram + trigram histogram sections to the given stream.
+ *
+ * Section headers are lowercase and end with a colon on their own line, and
+ * every entry line has the shape "<key>  <count>  (<pct>%)" with exactly two
+ * spaces as the separator between the three fields. This is the contract the
+ * MCP-side `profile` tool parses against — keep it stable when editing.
+ */
+void
+writeNGramSections(
+    std::ostream& out,
+    const OperationNGramTracker& tracker,
+    std::size_t topN) {
+
+    // Find the longest key in either histogram so counts/percentages line up
+    // under a stable column. Cap at a sensible width — very wide keys still
+    // produce parseable lines, they just push the numbers further right.
+    const auto topBigrams = tracker.topBigrams(topN);
+    const auto topTrigrams = tracker.topTrigrams(topN);
+
+    std::size_t keyWidth = 16;
+    for (const auto& e : topBigrams) {
+        if (e.first.size() > keyWidth) keyWidth = e.first.size();
+    }
+    for (const auto& e : topTrigrams) {
+        if (e.first.size() > keyWidth) keyWidth = e.first.size();
+    }
+
+    auto writeSection =
+        [&](const OperationNGramTracker::RankedEntries& entries,
+            std::uint64_t total) {
+        if (total == 0 || entries.empty()) {
+            out << "(no data)" << std::endl;
+            return;
+        }
+        for (const auto& e : entries) {
+            const double pct = 100.0 * static_cast<double>(e.second) /
+                static_cast<double>(total);
+            out << std::left << std::setw(static_cast<int>(keyWidth))
+                << e.first
+                << "  " << e.second
+                << "  (" << std::fixed << std::setprecision(2) << pct
+                << "%)" << std::endl;
+            out.unsetf(std::ios::floatfield);
+        }
+    };
+
+    out << std::endl << "bigram histograms:" << std::endl;
+    writeSection(topBigrams, tracker.totalBigrams());
+    out << std::endl << "trigram histograms:" << std::endl;
+    writeSection(topTrigrams, tracker.totalTrigrams());
+    out << std::endl << "n-gram totals:" << std::endl
+        << "operations " << tracker.totalOperations() << std::endl
+        << "bigrams " << tracker.totalBigrams() << std::endl
+        << "trigrams " << tracker.totalTrigrams() << std::endl;
+}
+
+/**
+ * Writes the per-function cycle-attribution section.
+ *
+ * Per-entry shape (parser contract):
+ *   "<function_name>  <cycles>  (<pct>%)  <calls>"
+ * with exactly two spaces separating each of the four fields. Percentage
+ * is relative to tracker.totalTrackedCycles() so the section sums to 100%
+ * (ignoring unattributedCycles() which is surfaced in the totals block).
+ */
+void
+writeFunctionCyclesSection(
+    std::ostream& out,
+    const FunctionCyclesTracker& tracker,
+    std::size_t topN) {
+
+    const auto top = tracker.topByCycles(topN);
+    std::size_t nameWidth = 24;
+    for (const auto& e : top) {
+        if (e.first.size() > nameWidth) nameWidth = e.first.size();
+    }
+
+    out << std::endl << "function cycles:" << std::endl;
+    if (tracker.totalTrackedCycles() == 0 || top.empty()) {
+        out << "(no data)" << std::endl;
+    } else {
+        for (const auto& e : top) {
+            const double pct = 100.0 *
+                static_cast<double>(e.second.cycles) /
+                static_cast<double>(tracker.totalTrackedCycles());
+            out << std::left << std::setw(static_cast<int>(nameWidth))
+                << e.first
+                << "  " << e.second.cycles
+                << "  (" << std::fixed << std::setprecision(2) << pct
+                << "%)  " << e.second.calls << std::endl;
+            out.unsetf(std::ios::floatfield);
+        }
+    }
+    out << std::endl << "function cycles totals:" << std::endl
+        << "functions " << tracker.functionCount() << std::endl
+        << "tracked_cycles " << tracker.totalTrackedCycles() << std::endl
+        << "unattributed_cycles " << tracker.unattributedCycles()
+        << std::endl;
+}
+
+/**
+ * Writes a per-FU utilization ranking, sorted by idle percentage descending.
+ *
+ * Per-entry shape (parser contract):
+ *   "<fu_name>  <triggers>  (<busy_pct>%)  <idle_cycles>  (<idle_pct>%)"
+ *
+ * This reformulates data already present in `info proc stats` into a
+ * pruning-oriented view: the most-idle FUs float to the top, so the
+ * question "LSU_2 is idle 92% of cycles, consider removing" becomes
+ * mechanical to answer. Percentages use triggerCount as the proxy for
+ * busy cycles — this matches the existing `info proc stats` numbers.
+ * For pipelined multi-cycle FUs this slightly under-counts occupancy;
+ * noted as a known limitation rather than worked around (pipeline-state
+ * attribution is a separate T2a v2 effort).
+ */
+void
+writeFuUtilizationSection(
+    std::ostream& out,
+    const UtilizationStats& stats,
+    const TTAMachine::Machine& mach,
+    ClockCycleCount totalCycles,
+    std::size_t topN) {
+
+    struct Entry {
+        std::string name;
+        std::uint64_t triggers;
+        double busyPct;
+    };
+    std::vector<Entry> entries;
+
+    auto addFu = [&](const TTAMachine::FunctionUnit* fu) {
+        const std::string name = fu->name();
+        const std::uint64_t triggers =
+            static_cast<std::uint64_t>(stats.triggerCount(name));
+        const double busy = totalCycles == 0
+            ? 0.0
+            : 100.0 * static_cast<double>(triggers) /
+                static_cast<double>(totalCycles);
+        entries.push_back({name, triggers, busy});
+    };
+
+    const TTAMachine::Machine::FunctionUnitNavigator& fuNav =
+        mach.functionUnitNavigator();
+    for (int i = 0; i < fuNav.count(); ++i) {
+        addFu(fuNav.item(i));
+    }
+    addFu(mach.controlUnit());
+
+    // Sort by idle percentage descending (= busy ascending). Ties broken
+    // lexicographically on name for determinism.
+    std::sort(
+        entries.begin(), entries.end(),
+        [](const Entry& a, const Entry& b) {
+            if (a.busyPct != b.busyPct) return a.busyPct < b.busyPct;
+            return a.name < b.name;
+        });
+    if (entries.size() > topN) {
+        entries.resize(topN);
+    }
+
+    std::size_t nameWidth = 16;
+    for (const auto& e : entries) {
+        if (e.name.size() > nameWidth) nameWidth = e.name.size();
+    }
+
+    out << std::endl << "fu utilization:" << std::endl;
+    if (entries.empty() || totalCycles == 0) {
+        out << "(no data)" << std::endl;
+    } else {
+        for (const auto& e : entries) {
+            const std::uint64_t idleCycles =
+                e.triggers >= totalCycles
+                    ? 0
+                    : static_cast<std::uint64_t>(totalCycles - e.triggers);
+            const double idlePct = 100.0 - e.busyPct;
+            out << std::left << std::setw(static_cast<int>(nameWidth))
+                << e.name
+                << "  " << e.triggers
+                << "  (" << std::fixed << std::setprecision(2) << e.busyPct
+                << "%)  " << idleCycles
+                << "  (" << std::fixed << std::setprecision(2) << idlePct
+                << "%)" << std::endl;
+            out.unsetf(std::ios::floatfield);
+        }
+    }
+    out << std::endl << "fu utilization totals:" << std::endl
+        << "fus " << (fuNav.count() + 1) << std::endl
+        << "cycles " << totalCycles << std::endl;
+}
+
+/**
+ * Writes a per-bus utilization ranking, sorted by write percentage
+ * descending (hottest bus first).
+ *
+ * Per-entry shape (parser contract):
+ *   "<bus_name>  <writes>  (<pct>%)  <idle_cycles>  (<idle_pct>%)"
+ *
+ * The hottest bus at the top is the primary serialization bottleneck;
+ * the tail of the list is where the scheduler may be leaving parallelism
+ * on the table (the `_1`-group-imbalance pattern).
+ */
+void
+writeBusUtilizationSection(
+    std::ostream& out,
+    const UtilizationStats& stats,
+    const TTAMachine::Machine& mach,
+    ClockCycleCount totalCycles,
+    std::size_t topN) {
+
+    struct Entry {
+        std::string name;
+        std::uint64_t writes;
+        double pct;
+    };
+    std::vector<Entry> entries;
+
+    const TTAMachine::Machine::BusNavigator& busNav = mach.busNavigator();
+    for (int i = 0; i < busNav.count(); ++i) {
+        const std::string name = busNav.item(i)->name();
+        const std::uint64_t writes =
+            static_cast<std::uint64_t>(stats.busWrites(name));
+        const double pct = totalCycles == 0
+            ? 0.0
+            : 100.0 * static_cast<double>(writes) /
+                static_cast<double>(totalCycles);
+        entries.push_back({name, writes, pct});
+    }
+
+    // Sort by write percentage descending (hottest first); lex tiebreaker.
+    std::sort(
+        entries.begin(), entries.end(),
+        [](const Entry& a, const Entry& b) {
+            if (a.pct != b.pct) return a.pct > b.pct;
+            return a.name < b.name;
+        });
+    if (entries.size() > topN) {
+        entries.resize(topN);
+    }
+
+    std::size_t nameWidth = 16;
+    for (const auto& e : entries) {
+        if (e.name.size() > nameWidth) nameWidth = e.name.size();
+    }
+
+    out << std::endl << "bus utilization:" << std::endl;
+    if (entries.empty() || totalCycles == 0) {
+        out << "(no data)" << std::endl;
+    } else {
+        for (const auto& e : entries) {
+            const std::uint64_t idleCycles =
+                e.writes >= totalCycles
+                    ? 0
+                    : static_cast<std::uint64_t>(totalCycles - e.writes);
+            const double idlePct = 100.0 - e.pct;
+            out << std::left << std::setw(static_cast<int>(nameWidth))
+                << e.name
+                << "  " << e.writes
+                << "  (" << std::fixed << std::setprecision(2) << e.pct
+                << "%)  " << idleCycles
+                << "  (" << std::fixed << std::setprecision(2) << idlePct
+                << "%)" << std::endl;
+            out.unsetf(std::ios::floatfield);
+        }
+    }
+    out << std::endl << "bus utilization totals:" << std::endl
+        << "buses " << busNav.count() << std::endl
+        << "cycles " << totalCycles << std::endl;
+}
+
+} // namespace
 
 /**
  * Implementation of "info registers".
@@ -1075,6 +1354,32 @@ public:
                 }
             }
 
+            // Always-available pruning-oriented views: synthesise existing
+            // UtilizationStats counters into per-FU and per-bus rankings.
+            writeFuUtilizationSection(
+                result, stats, mach, totalCycles, 20);
+            writeBusUtilizationSection(
+                result, stats, mach, totalCycles, 20);
+
+            // Append n-gram histograms when tracking is enabled, so that the
+            // MCP `profile` tool (and humans) see the same sequence data via
+            // the existing `info proc stats` path.
+            if (parent().simulatorFrontend().operationNGramTracking()) {
+                const OperationNGramTracker* tracker =
+                    parent().simulatorFrontend().operationNGramTracker();
+                if (tracker != NULL) {
+                    writeNGramSections(result, *tracker, 20);
+                }
+            }
+
+            if (parent().simulatorFrontend().functionCyclesTracking()) {
+                const FunctionCyclesTracker* tracker =
+                    parent().simulatorFrontend().functionCyclesTracker();
+                if (tracker != NULL) {
+                    writeFunctionCyclesSection(result, *tracker, 20);
+                }
+            }
+
             parent().interpreter()->setResult(result.str());
             return true;
 
@@ -1146,16 +1451,109 @@ public:
             return false;
         }
 
-        const int argumentCount = arguments.size() - 2; 
+        const int argumentCount = arguments.size() - 2;
 
-        if (!parent().checkArgumentCount(argumentCount, 1, 1)) {
+        if (!parent().checkArgumentCount(argumentCount, 1, 2)) {
             return false;
         }
 
-        const std::string command = 
+        const std::string command =
             StringTools::stringToLower(arguments[2].stringValue());
-        
-        const UtilizationStats& stats = 
+
+        if (command == "n_grams") {
+            std::size_t topN = 20;
+            if (argumentCount == 2) {
+                if (!parent().checkPositiveIntegerArgument(arguments[3])) {
+                    return false;
+                }
+                topN = static_cast<std::size_t>(arguments[3].integerValue());
+            }
+            const OperationNGramTracker* tracker =
+                parent().simulatorFrontend().operationNGramTracker();
+            if (tracker == NULL) {
+                parent().interpreter()->setError(std::string(
+                    "Operation n-gram tracking is not enabled. "
+                    "Enable with: setting n_gram_tracking 1"));
+                return false;
+            }
+            std::stringstream out;
+            writeNGramSections(out, *tracker, topN);
+            parent().interpreter()->setResult(out.str());
+            return true;
+        }
+
+        if (command == "function_cycles") {
+            std::size_t topN = 20;
+            if (argumentCount == 2) {
+                if (!parent().checkPositiveIntegerArgument(arguments[3])) {
+                    return false;
+                }
+                topN = static_cast<std::size_t>(arguments[3].integerValue());
+            }
+            const FunctionCyclesTracker* tracker =
+                parent().simulatorFrontend().functionCyclesTracker();
+            if (tracker == NULL) {
+                parent().interpreter()->setError(std::string(
+                    "Function-cycles tracking is not enabled. "
+                    "Enable with: setting function_cycles_tracking 1"));
+                return false;
+            }
+            std::stringstream out;
+            writeFunctionCyclesSection(out, *tracker, topN);
+            parent().interpreter()->setResult(out.str());
+            return true;
+        }
+
+        if (command == "fu_utilization") {
+            std::size_t topN = 20;
+            if (argumentCount == 2) {
+                if (!parent().checkPositiveIntegerArgument(arguments[3])) {
+                    return false;
+                }
+                topN = static_cast<std::size_t>(arguments[3].integerValue());
+            }
+            // No new state to toggle: this reformulates data already
+            // produced by UtilizationStats. Always available whenever
+            // simulation data exists.
+            std::stringstream out;
+            writeFuUtilizationSection(
+                out,
+                parent().simulatorFrontend().utilizationStatistics(),
+                parent().simulatorFrontend().machine(),
+                parent().simulatorFrontend().cycleCount(),
+                topN);
+            parent().interpreter()->setResult(out.str());
+            return true;
+        }
+
+        if (command == "bus_utilization") {
+            std::size_t topN = 20;
+            if (argumentCount == 2) {
+                if (!parent().checkPositiveIntegerArgument(arguments[3])) {
+                    return false;
+                }
+                topN = static_cast<std::size_t>(arguments[3].integerValue());
+            }
+            std::stringstream out;
+            writeBusUtilizationSection(
+                out,
+                parent().simulatorFrontend().utilizationStatistics(),
+                parent().simulatorFrontend().machine(),
+                parent().simulatorFrontend().cycleCount(),
+                topN);
+            parent().interpreter()->setResult(out.str());
+            return true;
+        }
+
+        // Fall-through sub-commands take no second argument.
+        if (argumentCount != 1) {
+            parent().interpreter()->setError(
+                SimulatorToolbox::textGenerator().text(
+                    Texts::TXT_UNKNOWN_SUBCOMMAND).str());
+            return false;
+        }
+
+        const UtilizationStats& stats =
             parent().simulatorFrontend().utilizationStatistics();
                    
         const TTAMachine::Machine& mach = 

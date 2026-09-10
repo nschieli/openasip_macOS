@@ -34,6 +34,7 @@
 
 #include "TCEStubTargetMachine.hh"
 #include <llvm/CodeGen/TargetSubtargetInfo.h>
+#include "SystemMacroCleanup.hh"
 #include <llvm/CodeGen/TargetLowering.h>
 
 /**

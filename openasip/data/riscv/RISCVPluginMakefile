@@ -2,6 +2,21 @@
 CXX := g++
 CXXFLAGS := -O2 -fPIC -std=c++17
 
+# On macOS, `-shared` is a synonym for `-dynamiclib`, and a dynamiclib must
+# have EVERY symbol resolved at link time. ELF `-shared` does the opposite: it
+# permits undefined symbols and leaves them to be bound at dlopen() time.
+#
+# This plugin is dlopen()'d into a host process that has already loaded
+# libLLVM, so its LLVM references are meant to bind to the host's copy. Without
+# the flag below, the link fails on macOS with hundreds of missing LLVM
+# symbols ("vtable for llvm::cl::opt<...>", "ld: symbol(s) not found").
+#
+# -undefined dynamic_lookup restores the ELF behaviour. This mirrors what
+# configure.ac already computes for OSAL plugins in SHARED_CXX_FLAGS.
+ifeq ($(shell uname -s),Darwin)
+LDFLAGS += -undefined dynamic_lookup
+endif
+
 # Get include directory from llvmtce-config
 LLVMTCE_INCLUDE_DIR := $(shell llvmtce-config --includedir)
 CXXFLAGS += -I$(LLVMTCE_INCLUDE_DIR) -I .

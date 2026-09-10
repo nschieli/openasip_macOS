@@ -968,23 +968,50 @@ namespace HDLGenerator {
         virtual void
         hdl(std::ostream& stream, Language lang, int level) override {
             if (lang == Language::VHDL) {
-                stream << "\n";
-                stream << StringTools::indent(level) << name() << " : process(";
-                std::string separator = "";
+                // Build sensitivity list, filtering out constants
+                std::vector<std::string> sensitivities;
                 for (auto&& r : readList_) {
                     if (!isConstant(r)) {
-                        stream << separator << r;
-                        separator = ", ";
+                        sensitivities.push_back(r);
                     }
                 }
-                stream << ")\n";
-                for (auto&& v : variables_) {
-                    v->declare(stream, lang, level + 1);
+                // Check if process body is empty. GHDL synthesis
+                // rejects processes without a sensitivity list, so
+                // skip the entire process if both the sensitivity
+                // list and body are empty.
+                std::ostringstream bodyStream;
+                implementAll(bodyStream, lang, level + 1);
+                std::string body = bodyStream.str();
+                if (sensitivities.empty() && body.empty()
+                    && variables_.empty()) {
+                    // Skip empty process entirely
+                } else {
+                    stream << "\n";
+                    stream << StringTools::indent(level)
+                           << name() << " : process";
+                    if (!sensitivities.empty()) {
+                        stream << "(";
+                        std::string separator = "";
+                        for (auto&& s : sensitivities) {
+                            stream << separator << s;
+                            separator = ", ";
+                        }
+                        stream << ")";
+                    }
+                    stream << "\n";
+                    for (auto&& v : variables_) {
+                        v->declare(stream, lang, level + 1);
+                    }
+                    stream << StringTools::indent(level) << "begin\n";
+                    if (body.empty()) {
+                        stream << StringTools::indent(level + 1)
+                               << "null;\n";
+                    } else {
+                        stream << body;
+                    }
+                    stream << StringTools::indent(level) << "end process "
+                           << name() << ";\n";
                 }
-                stream << StringTools::indent(level) << "begin\n";
-                implementAll(stream, lang, level + 1);
-                stream << StringTools::indent(level) << "end process "
-                       << name() << ";\n";
             } else if (lang == Language::Verilog) {
                 stream << "\n";
                 stream << StringTools::indent(level) << "// " << name() << "\n";

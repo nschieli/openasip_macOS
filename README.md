@@ -1,5 +1,13 @@
 # OpenASIP - Open Application-Specific Instruction-set Processor toolset
 
+> **A fork of [cpc/openasip](https://github.com/cpc/openasip) that makes OpenASIP
+> work on macOS (Apple Silicon).**
+>
+> The command-line flow and all four wxWidgets GUIs build and run natively on
+> arm64. Linux is upstream's and stays supported.
+>
+> [What this fork changes](#what-this-fork-changes) · [macOS prerequisites](#macos-apple-silicon)
+
 OpenASIP is an open application-specific instruction-set processor (ASIP)
 toolset for design and programming of customized co-processors (typically
 programmable accelerators).
@@ -22,6 +30,27 @@ processors.
 OpenASIP has been developed by several researchers (and research assistants) of
 Tampere University (Finland) and various other international contributors
 since the early 2003.
+
+What this fork changes
+----------------------
+
+**macOS (Apple Silicon)** — the command-line toolchain and all four wxWidgets
+GUIs (`prode`, `proxim`, `osed`, `hdbeditor`) build, install and run on arm64.
+
+**Fixes that also apply to Linux**
+
+- `oacc` uses `llvm-ar` to read the GNU-format bitcode libraries the toolset
+  ships. macOS's `ar` reads only BSD format and fails silently.
+- The build no longer requires a git working copy, so release tarballs and
+  exported trees build.
+- `oacc` compiles files in parallel.
+
+**64-bit TTA** — upstream's support was partial. Added: `i64` legalisation on
+32-bit targets, an `i64` register-pair calling convention, `i1`↔`i64` moves,
+`FABS` bitcast legality, integer min/max and `math.h` legalisation, and an LLVM
+register-class patch (`openasip/patches/`) applied by `install_llvm_22.sh`.
+
+Both platforms are built and self-tested on every change.
 
 License:
  * OpenASIP project source code is licensed with LGPL v2.1.
@@ -83,7 +112,10 @@ Supported Operating Systems
 OpenASIP requires a Unix-style operating system such as Linux. Debian-based
 distributions like Debian and Ubuntu should have most of the required
 libraries included, but other recent distribution versions should work
-fine too. MacOS support is experimental.
+fine too.
+
+On this fork, **macOS on Apple Silicon (arm64) is supported**: the command-line
+toolchain and all four wxWidgets GUIs build, install and run.
 
 The following installation steps install prerequisities, the OpenASIP-patched
 LLVM and OpenASIP to in `$HOME/local`.
@@ -133,6 +165,23 @@ Debian 9 and older
 ------------------
 
 Not supported anymore due to SQLite version too low (currently requires 3.25+)
+
+macOS (Apple Silicon)
+---------------------
+
+Requires [Homebrew](https://brew.sh). macOS provides Tcl, SQLite, editline and
+Python 3.
+
+```bash
+brew install boost xerces-c wxwidgets autoconf automake libtool cmake ninja
+```
+
+Homebrew installs into `/opt/homebrew`, which is not on the compiler's default
+search path on Apple Silicon; pass it to `configure` (see below).
+
+RTL simulation needs a VHDL simulator, which Homebrew does not provide: the
+`ghdl` cask is disabled. Use the OSS CAD Suite `darwin-arm64` bundle, which
+ships `ghdl` with the Yosys plugin. Not required to build or use the toolset.
 
 Red Hat Enterprise Linux 8 & clones
 -----------------------------------
@@ -224,6 +273,16 @@ In the root of OpenASIP sources (e.g. `openasip-devel/openasip`), run:
 ```bash
 ./autogen.sh && ./configure --prefix=$HOME/local && make -j8 && make install
 ```
+
+On macOS:
+
+```bash
+./autogen.sh
+./configure --prefix=$HOME/local --with-boost=/opt/homebrew --with-xerces=/opt/homebrew
+make -j$(sysctl -n hw.ncpu) && make install
+```
+
+Use `DYLD_LIBRARY_PATH` where the instructions above say `LD_LIBRARY_PATH`.
 
 Now OpenASIP commands such as `ttasim` should work. Check this with:
 

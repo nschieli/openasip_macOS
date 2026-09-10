@@ -7,7 +7,18 @@ AC_INIT([openasip],[2.2],[tce@lists.tuni.fi])
 
 # Get the current revision number so we can print it out in
 # tce-config --version
-REVNO=$(which git > /dev/null && echo -n "-r" && git rev-list --all --count)
+#
+# NOTE: do not use `echo -n` here. It is not POSIX -- the XSI spec gives echo
+# no options at all -- and the /bin/sh that configure runs under on macOS
+# prints the flags literally. That turned REVNO into "-n -r\n<count>", i.e. it
+# embedded a NEWLINE, which corrupted VERSION_STRING and in turn every
+# generated Makefile ("missing separator"). Build the string directly instead;
+# also guard the not-a-git-repo case, which previously yielded a bare "-r".
+REVNO=""
+if which git > /dev/null 2>&1; then
+    tce_revcount=$(git rev-list --all --count 2>/dev/null)
+    test -n "$tce_revcount" && REVNO="-r$tce_revcount"
+fi
 
 
 AC_SUBST([VERSION_STRING], ["$PACKAGE_VERSION${REVNO}"] )
@@ -85,13 +96,25 @@ AM_INIT_AUTOMAKE([1.9 tar-pax])
 AC_CANONICAL_HOST
 # Check for which host we are on and setup a few things
 # specifically based on the host
-AM_CONDITIONAL([DARWIN_HOST_OS], false)
+# NOTE: AM_CONDITIONAL must be invoked unconditionally. automake collects the
+# conditionals at macro-expansion time, so invoking it inside a shell `case`
+# does not mean what it reads like. Set a shell variable in the case, then
+# invoke the conditional once, afterwards.
+darwin_host_os=false
 case $host_os in
   darwin* )
-    AM_CONDITIONAL([DARWIN_HOST_OS], true)
+    darwin_host_os=true
     AC_SUBST([LIBRARY_SUFFIX], [".dylib"] )
-    AC_SUBST([CXXFLAGS], ["$CXXFLAGS -arch $host_cpu"])
-    AC_SUBST([LDFLAGS], ["$LDFLAGS -arch $host_cpu"])    
+    # autoconf canonicalises Apple Silicon to "aarch64", but Apple's clang
+    # spells that architecture "arm64" -- `-arch aarch64` is rejected outright
+    # ("invalid arch name"), so $host_cpu cannot be passed to -arch unmapped.
+    case $host_cpu in
+      aarch64 | arm64 )  darwin_arch=arm64 ;;
+      x86_64 | amd64 )   darwin_arch=x86_64 ;;
+      * )                darwin_arch=$host_cpu ;;
+    esac
+    AC_SUBST([CXXFLAGS], ["$CXXFLAGS -arch $darwin_arch"])
+    AC_SUBST([LDFLAGS], ["$LDFLAGS -arch $darwin_arch"])
 
          ;;
   *)
@@ -99,6 +122,7 @@ case $host_os in
     AC_SUBST([LIBRARY_SUFFIX], [".so"] )
          ;;
 esac
+AM_CONDITIONAL([DARWIN_HOST_OS], [test x$darwin_host_os = xtrue])
 
 #######################
 # CHECKS FOR PROGRAMS #
@@ -118,7 +142,11 @@ then
    case $host_os in
      darwin* )
           # Pass selected host architecture to plugin building as well.
-          AC_SUBST([SHARED_CXX_FLAGS], ["-flat_namespace -bundle -undefined dynamic_lookup -arch $host_cpu -fPIC"])
+          # $darwin_arch, not $host_cpu -- see the mapping above; clang rejects
+          # "-arch aarch64". This path builds the OSAL behaviour plugins and
+          # the LLVM backend plugin at RUN time, so an unmapped value here does
+          # not break the build, it breaks the tools once installed.
+          AC_SUBST([SHARED_CXX_FLAGS], ["-flat_namespace -bundle -undefined dynamic_lookup -arch $darwin_arch -fPIC"])
             ;;
      *)
           AC_SUBST([SHARED_CXX_FLAGS], ["-lgcc -shared -g -fPIC -Wno-deprecated"])
@@ -535,12 +563,28 @@ if test x"$LLVM_RTTI_CHECK" != x; then
 AC_MSG_ERROR([Your LLVM was not built with RTTI. You should rebuild LLVM with 'make REQUIRES_RTTI=1'. See TCE's INSTALL file for more information.])
 fi
 
-# Add LLVM libdir into the Darwin RPATH
-case $host_os in
-  darwin* )
-  LLVM_LDFLAGS="$LLVM_LDFLAGS -rpath $LLVM_LIBDIR"
-  ;;
-esac
+# Add LLVM libdir into the Darwin RPATH.
+#
+# This MUST be spelled -Wl,-rpath,DIR and not the bare "-rpath DIR" that was
+# here before. `-rpath` is one of LIBTOOL'S OWN link-mode options (it declares
+# the directory a library will be installed into), so libtool swallowed the
+# flag and its argument and never passed anything to ld -- the emitted link
+# line contained no rpath at all and the resulting binaries had zero LC_RPATH
+# entries. The -Wl, form is opaque to libtool and reaches the linker intact.
+#
+# This is load-bearing on macOS, not a convenience: libLLVMTCE.dylib's install
+# name is @rpath/libLLVMTCE.dylib, so a client with no LC_RPATH cannot find it
+# and dies at RUNTIME with
+#     dyld: Library not loaded: @rpath/libLLVMTCE.dylib
+# ...and DYLD_LIBRARY_PATH cannot be used as a fallback, because System
+# Integrity Protection STRIPS all DYLD_* variables from the environment when
+# exec'ing a protected binary such as /bin/sh -- which every make/libtool
+# recipe goes through.
+#
+# NOTE: the actual append happens AFTER the LLVM-version case below, which
+# unconditionally reassigns LLVM_LDFLAGS and would otherwise discard it.
+# Appending here (as the original code did) was dead: the value was
+# overwritten a few lines later in every version branch.
 
 # Hack for debian sid packages
 if test x"$LLVM_INCLUDEDIR" == x/usr/include/llvm; then
@@ -585,6 +629,14 @@ Unsupported LLVM version $LLVM_VERSION.
    ])
    LLVM_VERSION=
    ;;
+esac
+
+# Add the LLVM libdir to the Darwin RPATH. This must come AFTER the version
+# case above, every branch of which reassigns LLVM_LDFLAGS from scratch.
+case $host_os in
+  darwin* )
+  LLVM_LDFLAGS="$LLVM_LDFLAGS -Wl,-rpath,$LLVM_LIBDIR"
+  ;;
 esac
 ],
 
@@ -694,14 +746,14 @@ GUI_INCLUDES="$GUI_INCLUDES $($wxwindowsBin --cxxflags)"
 # if wx-config is found and the version is 2.4.*, conditional
 # WX is set.
 case "$($wxwindowsBin --version)" in
-     2.6.* | 2.8.* | 2.9.* | 3.0.* | 3.1.* | 3.2.* )
+     2.6.* | 2.8.* | 2.9.* | 3.0.* | 3.1.* | 3.2.* | 3.3.* )
    DO_WX_COMPILE=true
    ;;
      *)
    DO_WX_COMPILE=false
    AC_MSG_NOTICE(
    [
-    wxWidgets version must be 2.6.*, 2.8.*, 3.0.* or 3.2.* in order to
+    wxWidgets version must be 2.6.*, 2.8.*, 3.0.*, 3.2.* or 3.3.* in order to
     build graphical user interfaces.
    ])
    ;;
@@ -828,22 +880,15 @@ then
   AC_SUBST([GUI_INCLUDES])
 fi
 
-case $host_os in
-  darwin* )
-    # No wxWidgets compatible with TCE 1.2 on Darwin
-    GUI_LIBS=""
-    GUI_INCLUDES=""
-    AC_SUBST([GUI_LIBS])
-    AC_SUBST([GUI_INCLUDES])
-    #     DO_WX_COMPILE=false
-    AC_MSG_NOTICE(
-    [
-    wxWidgets present on Mac OSX may not be compatible with the TCE.
-    ])    
-    ;;
-   *)
-   ;;
-esac
+# NOTE (macOS port): the Darwin block that used to sit here unconditionally
+# blanked GUI_LIBS/GUI_INCLUDES -- while leaving DO_WX_COMPILE=true, since its
+# disable line was commented out. That produced an INCOHERENT configuration on
+# Darwin whenever wxWidgets was actually installed: AM_CONDITIONAL(WX) stayed
+# true, so the GUI directories entered SUBDIRS, but with empty include and link
+# flags they died at the first #include <wx/wx.h>. Its comment read "No
+# wxWidgets compatible with TCE 1.2 on Darwin", which is long obsolete --
+# wxOSX/Cocoa is a first-class upstream port. Removed; Darwin now takes the
+# same path as every other host.
 AM_CONDITIONAL(WX, test x$DO_WX_COMPILE = xtrue)
 ####################################################################
 #
@@ -1370,6 +1415,8 @@ AC_DEFINE_UNQUOTED([CONFIGURE_LDFLAGS], ["$LDFLAGS $TCE_LDFLAGS"],
                    [LDFLAGS used during configuration of TCE])
 
 
+
+
 # Make AC_OUTPUT to create each file listed here.
 AC_CONFIG_FILES([
   Makefile
@@ -1476,7 +1523,7 @@ AC_CONFIG_FILES([
   bclib/Makefile
   bclib/lwpr/Makefile
   bclib/saocl/Makefile 
-  bclib/cpp/Makefile 
+  bclib/cpp/Makefile
   bclib/include/Makefile
   bclib/include/CL/Makefile
 ])
@@ -1528,6 +1575,19 @@ RISCV_NEWLIB_CFLAGS="--tce-build-mode -D__riscv_float_abi_soft -D__riscv_xlen=32
 -Wno-unknown-warning-option -Wno-literal-range -Wno-pointer-sign -Wno-return-type \
 -Wno-empty-body -Wno-dangling-else -Wno-implicit-function-declaration -Wno-unused-value"
 
+# Flags for newlib's OWN BUILD TOOLS, which are compiled with CC_FOR_BUILD (the
+# host compiler) rather than with oacc. The vendored newlib 1.17 sources date
+# from 2008 and are pre-standard K&R C; modern clang has promoted several of
+# those constructs from warnings to ERRORS by default, so newlib/doc/makedoc.c
+# fails to compile:
+#     makedoc.c:1320: error: incompatible integer to pointer conversion
+#                     passing 'long' to parameter of type 'stinst_type'
+# Downgrade the relevant diagnostics to warnings instead of patching vendored
+# third-party code. -Wno-error= (rather than -Wno-) keeps them VISIBLE. All
+# three options are understood by both gcc and clang.
+NEWLIB_BUILD_CFLAGS="-Wno-error=int-conversion \
+-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types"
+
 AC_CONFIG_COMMANDS_POST ([
 echo "=== Configuring newlib for big endian machines =====";
 # make srcdir absolute
@@ -1538,9 +1598,17 @@ cd $builddirectory;
 # create builddir (if necessary)
 mkdir -p newlib-1.17.0/tce-llvm; 
 cd newlib-1.17.0/tce-llvm;
-RANLIB_FOR_TARGET=ranlib \
-NM_FOR_TARGET=nm AR_FOR_TARGET=ar \
+# The newlib "object files" here are LLVM BITCODE, not native objects, because
+# CC_FOR_TARGET is oacc. GNU binutils archive arbitrary member content happily,
+# so ar/ranlib/nm work by accident on Linux. The cctools ar/ranlib/nm that
+# Apple ships are Mach-O ONLY: ranlib warns "not a mach-o file", `ar x` then
+# extracts NOTHING, and assembling libc.a dies with
+# "ar: *.o: No such file or directory".
+# Prefer the bitcode-aware LLVM tools, falling back to binutils if absent.
+RANLIB_FOR_TARGET=`command -v llvm-ranlib || echo ranlib` \
+NM_FOR_TARGET=`command -v llvm-nm || echo nm` AR_FOR_TARGET=`command -v llvm-ar || echo ar` \
 AS_FOR_TARGET=as LD_FOR_TARGET=ld \
+CFLAGS_FOR_BUILD="$NEWLIB_BUILD_CFLAGS" \
 CFLAGS_FOR_TARGET=$NEWLIB_CFLAGS \
 CXX_FOR_TARGET=`pwd`/../../src/bintools/Compiler/oacc \
 CC_FOR_TARGET=`pwd`/../../src/bintools/Compiler/oacc \
@@ -1559,9 +1627,17 @@ cd $builddirectory;
 # create builddir (if necessary)
 mkdir -p newlib-1.17.0/tcele-llvm; 
 cd newlib-1.17.0/tcele-llvm;
-RANLIB_FOR_TARGET=ranlib \
-NM_FOR_TARGET=nm AR_FOR_TARGET=ar \
+# The newlib "object files" here are LLVM BITCODE, not native objects, because
+# CC_FOR_TARGET is oacc. GNU binutils archive arbitrary member content happily,
+# so ar/ranlib/nm work by accident on Linux. The cctools ar/ranlib/nm that
+# Apple ships are Mach-O ONLY: ranlib warns "not a mach-o file", `ar x` then
+# extracts NOTHING, and assembling libc.a dies with
+# "ar: *.o: No such file or directory".
+# Prefer the bitcode-aware LLVM tools, falling back to binutils if absent.
+RANLIB_FOR_TARGET=`command -v llvm-ranlib || echo ranlib` \
+NM_FOR_TARGET=`command -v llvm-nm || echo nm` AR_FOR_TARGET=`command -v llvm-ar || echo ar` \
 AS_FOR_TARGET=as LD_FOR_TARGET=ld \
+CFLAGS_FOR_BUILD="$NEWLIB_BUILD_CFLAGS" \
 CFLAGS_FOR_TARGET="--little-endian $NEWLIB_CFLAGS" \
 CXX_FOR_TARGET=`pwd`/../../src/bintools/Compiler/oacc \
 CC_FOR_TARGET=`pwd`/../../src/bintools/Compiler/oacc \
@@ -1579,9 +1655,17 @@ cd $builddirectory;
 # create builddir (if necessary)
 mkdir -p newlib-1.17.0/tcele64-llvm;
 cd newlib-1.17.0/tcele64-llvm;
-RANLIB_FOR_TARGET=ranlib \
-NM_FOR_TARGET=nm AR_FOR_TARGET=ar \
+# The newlib "object files" here are LLVM BITCODE, not native objects, because
+# CC_FOR_TARGET is oacc. GNU binutils archive arbitrary member content happily,
+# so ar/ranlib/nm work by accident on Linux. The cctools ar/ranlib/nm that
+# Apple ships are Mach-O ONLY: ranlib warns "not a mach-o file", `ar x` then
+# extracts NOTHING, and assembling libc.a dies with
+# "ar: *.o: No such file or directory".
+# Prefer the bitcode-aware LLVM tools, falling back to binutils if absent.
+RANLIB_FOR_TARGET=`command -v llvm-ranlib || echo ranlib` \
+NM_FOR_TARGET=`command -v llvm-nm || echo nm` AR_FOR_TARGET=`command -v llvm-ar || echo ar` \
 AS_FOR_TARGET=as LD_FOR_TARGET=ld \
+CFLAGS_FOR_BUILD="$NEWLIB_BUILD_CFLAGS" \
 CFLAGS_FOR_TARGET="--little-endian64 $NEWLIB_CFLAGS" \
 CXX_FOR_TARGET=`pwd`/../../src/bintools/Compiler/oacc \
 CC_FOR_TARGET=`pwd`/../../src/bintools/Compiler/oacc \
@@ -1602,9 +1686,17 @@ cd $builddirectory;
 # create builddir (if necessary)
 mkdir -p newlib-1.17.0/riscv-llvm;
 cd newlib-1.17.0/riscv-llvm;
-RANLIB_FOR_TARGET=ranlib \
-NM_FOR_TARGET=nm AR_FOR_TARGET=ar \
+# The newlib "object files" here are LLVM BITCODE, not native objects, because
+# CC_FOR_TARGET is oacc. GNU binutils archive arbitrary member content happily,
+# so ar/ranlib/nm work by accident on Linux. The cctools ar/ranlib/nm that
+# Apple ships are Mach-O ONLY: ranlib warns "not a mach-o file", `ar x` then
+# extracts NOTHING, and assembling libc.a dies with
+# "ar: *.o: No such file or directory".
+# Prefer the bitcode-aware LLVM tools, falling back to binutils if absent.
+RANLIB_FOR_TARGET=`command -v llvm-ranlib || echo ranlib` \
+NM_FOR_TARGET=`command -v llvm-nm || echo nm` AR_FOR_TARGET=`command -v llvm-ar || echo ar` \
 AS_FOR_TARGET=as LD_FOR_TARGET=ld \
+CFLAGS_FOR_BUILD="$NEWLIB_BUILD_CFLAGS" \
 CFLAGS_FOR_TARGET="$RISCV_NEWLIB_CFLAGS" \
 CXX_FOR_TARGET=`pwd`/../../src/bintools/Compiler/oacc-riscv \
 CC_FOR_TARGET=`pwd`/../../src/bintools/Compiler/oacc-riscv \

@@ -1,0 +1,201 @@
+name: Build and Test (macOS arm64)
+
+# A SEPARATE FILE, DELIBERATELY. `ci.yml` is upstream's and is byte-identical to
+# cpc/openasip; keeping it untouched means future upstream merges do not conflict
+# in the one file most likely to be edited on both sides. This workflow is ours.
+#
+# It certifies the thing this fork exists for: that OpenASIP builds and self-tests
+# on Apple Silicon from a clean checkout, with no developer machine's state.
+
+on:
+  push:
+    branches:
+      - main
+    # A tag builds and PUBLISHES a release. Downstream (Homebrew, the product
+    # package) needs a URL that does not expire; a workflow artifact does, in
+    # 30 days.
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    # macos-14 is the first Apple Silicon image and is what the port targets.
+    # Pinned rather than macos-latest so a runner-image bump cannot silently
+    # change what "certified on macOS" means.
+    runs-on: macos-14
+
+    # Only the release step needs this; scoped at the job because that is the
+    # smallest unit GitHub allows.
+    permissions:
+      contents: write
+
+    # ⚠ COST GATE. macOS runner minutes are billed at 10x on PRIVATE repos and are
+    #   free on public ones. While this repo is private the job runs ONLY when
+    #   someone asks for it; the moment it goes public it runs on every push with
+    #   no further change. Do not remove this without meaning to.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.repository.private == false
+
+    env:
+      LLVM_VERSION: 22
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          brew install boost xerces-c autoconf automake libtool cmake ninja wxwidgets
+          echo "--- versions, so a green names its toolchain ---"
+          autoconf --version | head -1
+          automake --version | head -1
+          brew list --versions boost xerces-c wxwidgets
+
+      - name: Create workspace directory
+        run: mkdir -p ${{ github.workspace }}/local
+
+      # Keyed on the INSTALLER, exactly as upstream's Linux job does: our i1 patch
+      # lives beside it, so a change to either correctly invalidates the cache
+      # rather than reusing an LLVM built without it.
+      - name: Restore LLVM cache
+        id: llvm-cache-restore
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/local
+          key: macos14-llvm-${{ hashFiles('openasip/tools/scripts/install_llvm_22.sh', 'openasip/patches/llvm-22-i1-regclass-fallback.patch') }}
+
+      - name: Install LLVM
+        run: |
+          if [[ "${{ steps.llvm-cache-restore.outputs.cache-hit }}" != "true" ]]; then
+            cd openasip
+            ./tools/scripts/install_llvm_${LLVM_VERSION}.sh ${{ github.workspace }}/local
+          else
+            echo "### LLVM restored from cache."
+          fi
+
+      - name: Save LLVM cache
+        uses: actions/cache/save@v5
+        if: steps.llvm-cache-restore.outputs.cache-hit != 'true'
+        with:
+          path: ${{ github.workspace }}/local
+          key: ${{ steps.llvm-cache-restore.outputs.cache-primary-key }}
+
+      # ⚠ Homebrew installs into /opt/homebrew, which is NOT on clang's default
+      #   search path on Apple Silicon — the single most common reason an
+      #   otherwise correct macOS build fails. Passed explicitly.
+      - name: Compile and install
+        run: |
+          export PATH=${{ github.workspace }}/local/bin:$PATH
+          cd openasip
+          ./autogen.sh
+          ./configure --prefix=${{ github.workspace }}/local \
+                      --with-boost=/opt/homebrew \
+                      --with-xerces=/opt/homebrew
+          make -j$(sysctl -n hw.ncpu)
+          make install
+
+      - name: oa-selftest
+        run: |
+          export PATH=${{ github.workspace }}/local/bin:$PATH
+          export DYLD_LIBRARY_PATH=${{ github.workspace }}/local/lib:$DYLD_LIBRARY_PATH
+          oa-selftest -v -f
+
+      # ⭐ KEEP THE BUILD — AFTER oa-selftest, DELIBERATELY. An artifact
+      #    survives a failed job, so packaging before the tests publishes a
+      #    binary nothing vouched for. Downstream (product_1) consumes this,
+      #    so it must not exist unless the selftest passed.
+      # ⭐ KEEP THE BUILD. This repository is public, so macOS runners here are
+      #    free — which makes this the project's always-available Apple Silicon
+      #    builder. A private repo cannot do this job: macOS bills at 10x there,
+      #    and one build would be a large fraction of a monthly allowance.
+      # ⇒ Downstream packaging (Homebrew bottles, the Verdon product package)
+      #   consumes this artifact instead of rebuilding the toolchain.
+      # ⚠ LGPL v2.1 obliges us to make the corresponding source available
+      #   alongside a distributed binary. It is this repository, at the commit
+      #   named in BUILD-INFO below, which is why that file is written here
+      #   rather than assumed.
+      - name: Record what was built
+        run: |
+          cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF
+          repository : ${{ github.repository }}
+          commit     : ${{ github.sha }}
+          ref        : ${{ github.ref_name }}
+          run        : ${{ github.run_id }}
+          built      : $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner     : $(sw_vers -productName) $(sw_vers -productVersion) $(uname -m)
+
+          Licensed LGPL v2.1. Corresponding source is the repository and commit
+          above: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+          EOF
+          cat ${{ github.workspace }}/local/BUILD-INFO
+
+      - name: Package the prefix
+        run: |
+          cd ${{ github.workspace }}
+          tar -czf openasip-macos-arm64.tar.gz local
+          ls -lh openasip-macos-arm64.tar.gz
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: openasip-macos-arm64
+          path: openasip-macos-arm64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      # ⭐ THE PERMANENT URL. The artifact above expires in 30 days, which is fine
+      #    for CI and useless for a package manager: a Homebrew bottle's URL must
+      #    outlive the run that produced it.
+      # ⚠ Runs ONLY on a tag, and only after oa-selftest, so a published binary is
+      #   always one a passing build produced.
+      - name: Checksum
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cd ${{ github.workspace }}
+          shasum -a 256 openasip-macos-arm64.tar.gz > openasip-macos-arm64.tar.gz.sha256
+          cat openasip-macos-arm64.tar.gz.sha256
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd ${{ github.workspace }}
+          cat > NOTES.md <<'EOF'
+          OpenASIP toolchain for macOS on Apple Silicon (arm64), built and
+          self-tested by CI from a clean checkout.
+
+          The archive expands to a `local/` prefix containing OpenASIP and the
+          patched LLVM it requires. `local/BUILD-INFO` records the commit, the
+          run and the runner.
+
+          Licensed LGPL v2.1. The corresponding source is this repository at the
+          commit named in BUILD-INFO.
+
+          Verify:
+
+              shasum -a 256 -c openasip-macos-arm64.tar.gz.sha256
+          EOF
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "OpenASIP macOS arm64 ${GITHUB_REF_NAME}" \
+            --notes-file NOTES.md \
+            openasip-macos-arm64.tar.gz \
+            openasip-macos-arm64.tar.gz.sha256
+
+      # ⛔ NOT RUN HERE, AND SAID OUT LOUD RATHER THAN OMITTED: the QEMU install,
+      #    the unit-test suite and systemtest.py are exercised by the Linux job.
+      #    They carry Linux assumptions that have not been checked on macOS, and a
+      #    job that silently skipped them would report a green covering less than
+      #    a reader would assume. Widen this deliberately, with evidence, not by
+      #    adding steps and hoping.
+      - name: What this job did and did not cover
+        if: always()
+        run: |
+          echo "Covered : configure, build, install, oa-selftest on macOS/arm64 from a clean checkout."
+          echo "NOT here: QEMU-OpenASIP, unit tests, systemtest.py — see the Linux job."

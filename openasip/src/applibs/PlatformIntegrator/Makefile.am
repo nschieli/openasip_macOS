@@ -12,7 +12,9 @@ libplatformintegrator_la_SOURCES = \
 	Vlnv.cc AlteraMemGenerator.cc IPXactAddressSpace.cc \
 	Stratix3DevKitIntegrator.cc XilinxBlockRamGenerator.cc \
 	AlmaIFIntegrator.cc \
-	DummyMemGenerator.cc
+	DummyMemGenerator.cc \
+	LatticeECP5Integrator.cc \
+	LatticeNexusIntegrator.cc
 
 
 SRC_ROOT_DIR = $(top_srcdir)/src

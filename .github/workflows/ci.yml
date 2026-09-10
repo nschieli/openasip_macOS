@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set environment variables
         run: |
@@ -41,6 +41,15 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # ⛔ THE RUNNER IMAGE PRECONFIGURES APT REPOSITORIES THIS PROJECT DOES
+          #    NOT USE, AND ONE OF THEM CAN FAIL THE BUILD. 2026-09-09: Google
+          #    served a Packages index whose hash did not match its own Release
+          #    file; `apt-get update` exited 100 and the job died in 21 seconds,
+          #    twice, without reaching a compiler.
+          # ⇒ Remove what we never install from, so a third party's mirror
+          #   cannot decide whether OpenASIP builds. Every package below comes
+          #   from Ubuntu's own archive.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
           sudo apt-get update
           sudo apt-get install -y \
             libwxgtk3.2-dev \
@@ -70,17 +79,43 @@ jobs:
 
           sudo apt-get purge -y 'llvm-*' 'clang-*' 'libllvm-*' 'lld-*'
 
+      # ⚠ ADDED IN THIS FORK. The first CI run failed in the QEMU build with
+      #   "error writing to /home/runner/tmp/ccHiNk1P.s: No space left on device"
+      #   — not a QEMU defect, just disk exhaustion after a patched-LLVM build, an
+      #   OpenASIP build and QEMU's 2736 objects on the same runner. The runner
+      #   images carry large preinstalled toolchains none of this needs.
+      # ⇒ Measured, not assumed: df is printed before and after so the reclaim is
+      #   a number in the log rather than a belief.
+      - name: Free disk space
+        run: |
+          echo "--- before ---"; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force > /dev/null 2>&1 || true
+          echo "--- after ---"; df -h /
+
       - name: Create workspace directory
         run: |
           mkdir -p ${{ github.workspace }}/local
 
       - name: Restore LLVM cache
         id: llvm-cache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             ${{ github.workspace }}/local
-          key: ${{ runner.os }}-llvm-${{ hashFiles('openasip/tools/scripts/install_llvm_${{ env.LLVM_VERSION }}.sh') }}
+          # ⛔ FIXED IN THIS FORK. This read
+          #      hashFiles('openasip/tools/scripts/install_llvm_${{ env.LLVM_VERSION }}.sh')
+          #    and a nested ${{ }} is NOT interpolated inside a hashFiles argument,
+          #    so hashFiles matched no file and returned "". MEASURED in run 1's
+          #    log: "Cache not found for input keys: Linux-llvm-" — the hash was
+          #    empty and the key was a CONSTANT.
+          # ⇒ A constant key never invalidates. Change the installer — as this fork
+          #   does, to apply the i1 register-class patch — and CI silently keeps
+          #   testing against an LLVM built without it. The failure is invisible:
+          #   the cache hits, the build is green, and the compiler is the wrong one.
+          # ⚠ The patch file is hashed too, so editing either invalidates.
+          key: ${{ runner.os }}-llvm-${{ hashFiles('openasip/tools/scripts/install_llvm_22.sh', 'openasip/patches/llvm-22-i1-regclass-fallback.patch') }}
 
       - name: Install LLVM
         run: |
@@ -94,7 +129,7 @@ jobs:
 
       - name: Save LLVM cache
         id: llvm-cache-save
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: ${{ github.workspace }}/local
           key: ${{ steps.llvm-cache-restore.outputs.cache-primary-key }}
@@ -107,7 +142,13 @@ jobs:
           make -j$(nproc)
           make install
 
+      # ⚠ ADDED IN THIS FORK: continue-on-error. QEMU is used by the RISC-V flow
+      #   only, and a failure here previously SKIPPED oa-selftest, the unit tests
+      #   and the system tests — so one unrelated step took the whole signal with
+      #   it. Those three are the ones this fork needs to certify, so they must
+      #   not be gated on QEMU building.
       - name: Install QEMU-OpenASIP
+        continue-on-error: true
         run: |
           cd openasip
           python3 ./tools/scripts/install_qemu.py $HOME/qemu-openasip

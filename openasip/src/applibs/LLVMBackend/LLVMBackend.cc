@@ -1069,7 +1069,15 @@ LLVMBackend::createPlugin() {
         " -I" + tempDir_ +
         pluginIncludeFlags +
         " " + SHARED_CXX_FLAGS +
-        " " + LLVM_CPPFLAGS;
+        " " + LLVM_CPPFLAGS +
+        // CONFIGURE_CPPFLAGS carries the include paths of the THIRD-PARTY
+        // libraries found at configure time. The plugin sources pull in
+        // Conversion.hh, which includes <xercesc/util/XMLString.hpp>, so those
+        // paths are genuinely required here. On a distro where xerces lives in
+        // /usr/include this is a no-op, which is why the omission went
+        // unnoticed; with Homebrew (/opt/homebrew/include) the plugin build
+        // fails at RUN time with "xercesc/util/XMLString.hpp file not found".
+        " " + CONFIGURE_CPPFLAGS;
 
     if (useInstalledVersion_)
         cmd += " -I`" LLVM_CONFIG " --includedir`";

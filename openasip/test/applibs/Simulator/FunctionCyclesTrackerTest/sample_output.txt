@@ -1,0 +1,38 @@
+1
+1
+2124847920
+
+
+function cycles:
+__udivsi3                 13356  (39.39%)  9
+main                      9796  (28.89%)  1
+__mulsi3                  4194  (12.37%)  9
+__sfvwrite_r              2156  (6.36%)  2
+_vfprintf_r               1758  (5.19%)  1
+
+function cycles totals:
+functions 13
+tracked_cycles 33904
+unattributed_cycles 0
+
+
+
+bigram histograms:
+ADD -> LD32                       2148  (13.13%)
+SHRU1_32 -> SHRU1_32              1543  (9.43%)
+LD32 -> ADD                       1286  (7.86%)
+ADD -> ADD                        1267  (7.74%)
+ST32 -> ADD                       1004  (6.14%)
+
+trigram histograms:
+SHRU1_32 -> SHRU1_32 -> SHRU1_32  1268  (7.75%)
+ADD -> LD32 -> ADD                1088  (6.65%)
+LD32 -> ADD -> LD32               519  (3.17%)
+ST32 -> ADD -> LD32               468  (2.86%)
+ADD -> ADD -> LD32                362  (2.21%)
+
+n-gram totals:
+operations 16361
+bigrams 16360
+trigrams 16359
+

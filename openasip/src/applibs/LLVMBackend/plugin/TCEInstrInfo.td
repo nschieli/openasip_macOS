@@ -1,8 +1,8 @@
 //
 // TCE Baseopset instruction information.
 //
-// Author: Veli-Pekka Jääskeläinen 2007 (vjaaskel@cs.tut.fi)
-// Author: Mikael Lepistö 2009 (mikael.lepisto@tut.fi)
+// Author: Veli-Pekka Jï¿½ï¿½skelï¿½inen 2007 (vjaaskel@cs.tut.fi)
+// Author: Mikael Lepistï¿½ 2009 (mikael.lepisto@tut.fi)
 // Author: Heikki Kultala 2012 (heikki.kultala@tut.fi)
 //
 
@@ -183,6 +183,18 @@ def MOVI32I1rr : InstTCE<(outs R1Regs:$dst), (ins R32IRegs:$src),
 def MOVI64I1ss : InstTCE<(outs R1Regs:$dst), (ins R64IRegs:$src),
                      "$src -> $dst;",
                     [(set R1Regs:$dst, (trunc R64IRegs:$src))]>, Requires<[Bitness64]>;
+
+def MOVI1I64ss : InstTCE<(outs R64IRegs:$dst), (ins R1Regs:$src),
+                     "$src -> $dst;",
+                    []>, Requires<[Bitness64]>;
+
+def MOVGI64ss : InstTCE<(outs R64IRegs:$dst), (ins GuardRegs:$src),
+                     "$src -> $dst;",
+                    []>, Requires<[Bitness64]>;
+
+def MOVI64Gss : InstTCE<(outs GuardRegs:$dst), (ins R64IRegs:$src),
+                     "$src -> $dst;",
+                    []>, Requires<[Bitness64]>;
 
 def MOVFI32rf : InstTCE<(outs R32IRegs:$dst), (ins R32FPRegs:$src),
 	           "$src -> $dst;",

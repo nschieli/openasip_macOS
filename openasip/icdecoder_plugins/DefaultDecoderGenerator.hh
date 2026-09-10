@@ -332,9 +332,14 @@ private:
     /// Generate debugger signals?
     bool generateDebugger_;
 	/// Reset synchronously (otherwise asynchronous)
-    bool syncReset_;
+    /// ⚠ The initialisers below are load-bearing, not style. readParameters()
+    /// assigns generateBusEnable_ only on the branch taken when bus tracing is
+    /// OFF, so with it ON the flag was read indeterminate and the emitted
+    /// decoder gained or lost a signal declaration depending on the heap
+    /// layout -- non-reproducible HDL at 5-25% per run. Do not remove.
+    bool syncReset_ = false;
     /// Bus enable signals for bustrace
-    bool generateBusEnable_;
+    bool generateBusEnable_ = false;
     /// The starting cycle for bus tracing.
     unsigned int lockTraceStartingCycle_;
     /// The flag to generate global lock request handling in decoder.

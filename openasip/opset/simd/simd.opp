@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<!--
+    Copyright (C) 2026 Nicolas Schieli.
+
+    This library is free software; you can redistribute it and/or
+    modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    This library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+    02110-1301 USA
+
+    SPDX-License-Identifier: LGPL-2.1-or-later
+-->
+<osal version="0.1">
+
+  <operation>
+    <name>MAC8X8</name>
+    <description>Packed int8 SIMD multiply-accumulate. Multiplies 8 pairs of signed
+      8-bit integers packed in 64-bit operands and accumulates into a 64-bit result.
+      result = acc + sum(signed_byte(a,i) * signed_byte(b,i)) for i in 0..7.</description>
+    <inputs>3</inputs>
+    <outputs>1</outputs>
+    <in element-count="1" element-width="64" id="1" type="SLongWord">
+    </in>
+    <in element-count="1" element-width="64" id="2" type="ULongWord">
+      <can-swap>
+        <in id="3"/>
+      </can-swap>
+    </in>
+    <in element-count="1" element-width="64" id="3" type="ULongWord">
+      <can-swap>
+        <in id="2"/>
+      </can-swap>
+    </in>
+    <out element-count="1" element-width="64" id="4" type="SLongWord"/>
+  </operation>
+
+  <operation>
+    <name>EMAC2X32</name>
+    <description>Element-wise 2-channel int8 multiply-accumulate for DepthwiseConv2D.
+      Processes 2 output channels in parallel with independent int32 accumulators.
+      op1 = {acc_hi[63:32], acc_lo[31:0]} two packed int32 accumulators,
+      op2 = {input_offset[63:32], unused[31:16], filter_1[15:8], filter_0[7:0]},
+      op3 = {unused[63:16], input_1[15:8], input_0[7:0]}.
+      acc_lo += sext(filter_0) * (sext(input_0) + offset),
+      acc_hi += sext(filter_1) * (sext(input_1) + offset).</description>
+    <inputs>3</inputs>
+    <outputs>1</outputs>
+    <in element-count="1" element-width="64" id="1" type="SLongWord">
+    </in>
+    <in element-count="1" element-width="64" id="2" type="ULongWord">
+    </in>
+    <in element-count="1" element-width="64" id="3" type="ULongWord">
+    </in>
+    <out element-count="1" element-width="64" id="4" type="SLongWord"/>
+  </operation>
+
+  <operation>
+    <name>EMAC4X32</name>
+    <description>Dual-position 2-channel int4 multiply-accumulate for DepthwiseConv2D.
+      Processes 2 filter positions x 2 output channels = 4 MACs per cycle.
+      op1 = {acc_hi[63:32], acc_lo[31:0]} two packed int32 accumulators,
+      op2 = {offset[63:32], input_b[31:24], input_a[23:16], fb[15:8], fa[7:0]},
+        fa = {f_a1[7:4], f_a0[3:0]} packed int4 filters at position a,
+        fb = {f_b1[7:4], f_b0[3:0]} packed int4 filters at position b,
+      op3 = unused.
+      acc_lo += sext4(fa0)*(sext8(input_a)+offset) + sext4(fb0)*(sext8(input_b)+offset),
+      acc_hi += sext4(fa1)*(sext8(input_a)+offset) + sext4(fb1)*(sext8(input_b)+offset).</description>
+    <inputs>3</inputs>
+    <outputs>1</outputs>
+    <in element-count="1" element-width="64" id="1" type="SLongWord">
+    </in>
+    <in element-count="1" element-width="64" id="2" type="ULongWord">
+    </in>
+    <in element-count="1" element-width="64" id="3" type="ULongWord">
+    </in>
+    <out element-count="1" element-width="64" id="4" type="SLongWord"/>
+  </operation>
+
+  <operation>
+    <name>REQUANT</name>
+    <description>Fused post-MAC int8 requantization. Performs bias add, fixed-point
+      multiply (Q31), rounding right-shift, output offset, and activation clamp
+      in a single 2-cycle operation. Replaces MultiplyByQuantizedMultiplier +
+      offset + clamp sequence from TFLite int8 quantized inference.
+      op1 = accumulator (int64, lower 32 bits used),
+      op2 = {multiplier[63:32], bias[31:0]} packed as uint64,
+      op3 = {shift[31:24], offset[23:16], min[15:8], max[7:0]} in lower 32 bits,
+      result = int8 sign-extended to 64 bits.</description>
+    <inputs>3</inputs>
+    <outputs>1</outputs>
+    <in element-count="1" element-width="64" id="1" type="SLongWord">
+    </in>
+    <in element-count="1" element-width="64" id="2" type="ULongWord">
+    </in>
+    <in element-count="1" element-width="64" id="3" type="ULongWord">
+    </in>
+    <out element-count="1" element-width="64" id="4" type="SLongWord"/>
+  </operation>
+
+</osal>
