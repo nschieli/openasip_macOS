@@ -120,7 +120,7 @@ TCETargetLowering::LowerReturn(SDValue Chain,
     CCValAssign &VA = RVLocs[i];
     assert(VA.isRegLoc() && "Can only return in registers!");
 
-    Chain = DAG.getCopyToReg(Chain, dl, VA.getLocReg(), 
+    Chain = DAG.getCopyToReg(Chain, dl, VA.getLocReg(),
                              OutVals[i], Flag);
 
     // Guarantee that all emitted copies are stuck together with flags.
@@ -580,8 +580,18 @@ TCETargetLowering::TCETargetLowering(
     setOperationAction(ISD::FP_TO_SINT, MVT::i8   , Promote);
     setOperationAction(ISD::FP_TO_SINT, MVT::i16  , Promote);
 
-    setOperationAction(ISD::FABS, MVT::f32  , Custom);
+#ifdef TARGET64BIT
+    // On 64-bit TTA, custom FABS uses i32 bitcast which is an illegal type.
+    // Use Expand for f32 (LLVM decomposes to fneg+select using legal types).
+    // f64 FABS can use Custom since i64 bitcast is legal on 64-bit.
+    setOperationAction(ISD::FABS, MVT::f32  , Expand);
     setOperationAction(ISD::FABS, MVT::f64  , Custom);
+#else
+    setOperationAction(ISD::FABS, MVT::f32  , Custom);
+    // On 32-bit TTA, custom FABS for f64 bitcasts to i64 which has no
+    // register class. Use Expand instead (LLVM decomposes to logic ops).
+    setOperationAction(ISD::FABS, MVT::f64  , Expand);
+#endif
 
     setOperationAction(ISD::GlobalAddress, DEFAULT_TYPE, Custom);
     setOperationAction(ISD::BlockAddress, DEFAULT_TYPE, Custom);
@@ -656,6 +666,71 @@ TCETargetLowering::TCETargetLowering(
     setOperationAction(ISD::SRA_PARTS, MVT::i32, Expand);
     setOperationAction(ISD::SRL_PARTS, MVT::i32, Expand);
 
+#ifndef TARGET64BIT
+    // i64 is 8 bytes (i64:64:64 in data layout) but no i64 register class
+    // exists on 32-bit TTA. LLVM's type legalizer splits i64 values into
+    // pairs of i32 automatically. We mark all i64 operations as Expand.
+    // This is the standard pattern used by ARM Cortex-M4, MIPS32, RISC-V32.
+
+    // Arithmetic
+    setOperationAction(ISD::ADD,  MVT::i64, Expand);
+    setOperationAction(ISD::SUB,  MVT::i64, Expand);
+    setOperationAction(ISD::MUL,  MVT::i64, Expand);
+    setOperationAction(ISD::SDIV, MVT::i64, Expand);
+    setOperationAction(ISD::UDIV, MVT::i64, Expand);
+    setOperationAction(ISD::SREM, MVT::i64, Expand);
+    setOperationAction(ISD::UREM, MVT::i64, Expand);
+
+    // Shifts
+    setOperationAction(ISD::SHL, MVT::i64, Expand);
+    setOperationAction(ISD::SRA, MVT::i64, Expand);
+    setOperationAction(ISD::SRL, MVT::i64, Expand);
+
+    // Bitwise
+    setOperationAction(ISD::AND, MVT::i64, Expand);
+    setOperationAction(ISD::OR,  MVT::i64, Expand);
+    setOperationAction(ISD::XOR, MVT::i64, Expand);
+
+    // Comparisons and select
+    setOperationAction(ISD::SETCC,  MVT::i64, Expand);
+    setOperationAction(ISD::SELECT, MVT::i64, Expand);
+
+    // Extensions and truncation
+    setOperationAction(ISD::SIGN_EXTEND,       MVT::i64, Expand);
+    setOperationAction(ISD::ZERO_EXTEND,       MVT::i64, Expand);
+    setOperationAction(ISD::ANY_EXTEND,        MVT::i64, Expand);
+    setOperationAction(ISD::TRUNCATE,          MVT::i64, Expand);
+    setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i64, Expand);
+
+    // Multiply high/low (also set unconditionally below, but explicit here)
+    setOperationAction(ISD::MULHU, MVT::i64, Expand);
+    setOperationAction(ISD::MULHS, MVT::i64, Expand);
+
+    // Bit counting, byte swap, rotations
+    setOperationAction(ISD::CTLZ,  MVT::i64, Expand);
+    setOperationAction(ISD::CTTZ,  MVT::i64, Expand);
+    setOperationAction(ISD::CTPOP, MVT::i64, Expand);
+    setOperationAction(ISD::BSWAP, MVT::i64, Expand);
+    setOperationAction(ISD::ROTL,  MVT::i64, Expand);
+    setOperationAction(ISD::ROTR,  MVT::i64, Expand);
+
+    // FP conversions involving i64
+    setOperationAction(ISD::SINT_TO_FP, MVT::i64, Expand);
+    setOperationAction(ISD::UINT_TO_FP, MVT::i64, Expand);
+    setOperationAction(ISD::FP_TO_SINT, MVT::i64, Expand);
+    setOperationAction(ISD::FP_TO_UINT, MVT::i64, Expand);
+
+    // Carry operations
+    setOperationAction(ISD::ADDC, MVT::i64, Expand);
+    setOperationAction(ISD::ADDE, MVT::i64, Expand);
+    setOperationAction(ISD::SUBC, MVT::i64, Expand);
+    setOperationAction(ISD::SUBE, MVT::i64, Expand);
+
+    // Div/rem combined
+    setOperationAction(ISD::SDIVREM, MVT::i64, Expand);
+    setOperationAction(ISD::UDIVREM, MVT::i64, Expand);
+#endif // !TARGET64BIT
+
     setOperationAction(ISD::VASTART           , MVT::Other, Custom);
 
     setOperationAction(ISD::VAARG             , MVT::Other, Expand);
@@ -668,6 +743,135 @@ TCETargetLowering::TCETargetLowering(
 
     setOperationAction(ISD::FCOPYSIGN, MVT::f64, Expand);
     setOperationAction(ISD::FCOPYSIGN, MVT::f32, Expand);
+
+    // Integer min/max: expand to select+compare (no libcall needed).
+    // Common in quantised integer kernels (clamping, activation ranges).
+    setOperationAction(ISD::SMAX, MVT::i32, Expand);
+    setOperationAction(ISD::SMIN, MVT::i32, Expand);
+    setOperationAction(ISD::UMAX, MVT::i32, Expand);
+    setOperationAction(ISD::UMIN, MVT::i32, Expand);
+    setOperationAction(ISD::SMAX, MVT::i8, Expand);
+    setOperationAction(ISD::SMIN, MVT::i8, Expand);
+    setOperationAction(ISD::UMAX, MVT::i8, Expand);
+    setOperationAction(ISD::UMIN, MVT::i8, Expand);
+    setOperationAction(ISD::SMAX, MVT::i16, Expand);
+    setOperationAction(ISD::SMIN, MVT::i16, Expand);
+    setOperationAction(ISD::UMAX, MVT::i16, Expand);
+    setOperationAction(ISD::UMIN, MVT::i16, Expand);
+    setOperationAction(ISD::SMAX, MVT::i64, Expand);
+    setOperationAction(ISD::SMIN, MVT::i64, Expand);
+    setOperationAction(ISD::UMAX, MVT::i64, Expand);
+    setOperationAction(ISD::UMIN, MVT::i64, Expand);
+
+    // Float math ops: expand to libcalls (expf, roundf, sinf, etc.)
+    // Needed wherever libm float math is used.
+    setOperationAction(ISD::FSIN, MVT::f32, Expand);
+    setOperationAction(ISD::FCOS, MVT::f32, Expand);
+    setOperationAction(ISD::FEXP, MVT::f32, Expand);
+    setOperationAction(ISD::FEXP2, MVT::f32, Expand);
+    setOperationAction(ISD::FLOG, MVT::f32, Expand);
+    setOperationAction(ISD::FLOG2, MVT::f32, Expand);
+    setOperationAction(ISD::FLOG10, MVT::f32, Expand);
+    setOperationAction(ISD::FPOW, MVT::f32, Expand);
+    setOperationAction(ISD::FREM, MVT::f32, Expand);
+    setOperationAction(ISD::FSQRT, MVT::f32, Expand);
+    setOperationAction(ISD::FCEIL, MVT::f32, Expand);
+    setOperationAction(ISD::FFLOOR, MVT::f32, Expand);
+    setOperationAction(ISD::FROUND, MVT::f32, Expand);
+    setOperationAction(ISD::FROUNDEVEN, MVT::f32, Expand);
+    setOperationAction(ISD::FTRUNC, MVT::f32, Expand);
+    setOperationAction(ISD::FNEARBYINT, MVT::f32, Expand);
+    setOperationAction(ISD::FRINT, MVT::f32, Expand);
+    setOperationAction(ISD::FMINNUM, MVT::f32, Expand);
+    setOperationAction(ISD::FMAXNUM, MVT::f32, Expand);
+    setOperationAction(ISD::FMA, MVT::f32, Expand);
+
+    setOperationAction(ISD::FSIN, MVT::f64, Expand);
+    setOperationAction(ISD::FCOS, MVT::f64, Expand);
+    setOperationAction(ISD::FEXP, MVT::f64, Expand);
+    setOperationAction(ISD::FEXP2, MVT::f64, Expand);
+    setOperationAction(ISD::FLOG, MVT::f64, Expand);
+    setOperationAction(ISD::FLOG2, MVT::f64, Expand);
+    setOperationAction(ISD::FLOG10, MVT::f64, Expand);
+    setOperationAction(ISD::FPOW, MVT::f64, Expand);
+    setOperationAction(ISD::FREM, MVT::f64, Expand);
+    setOperationAction(ISD::FSQRT, MVT::f64, Expand);
+    setOperationAction(ISD::FCEIL, MVT::f64, Expand);
+    setOperationAction(ISD::FFLOOR, MVT::f64, Expand);
+    setOperationAction(ISD::FROUND, MVT::f64, Expand);
+    setOperationAction(ISD::FROUNDEVEN, MVT::f64, Expand);
+    setOperationAction(ISD::FTRUNC, MVT::f64, Expand);
+    setOperationAction(ISD::FNEARBYINT, MVT::f64, Expand);
+    setOperationAction(ISD::FRINT, MVT::f64, Expand);
+    setOperationAction(ISD::FMINNUM, MVT::f64, Expand);
+    setOperationAction(ISD::FMAXNUM, MVT::f64, Expand);
+    setOperationAction(ISD::FMA, MVT::f64, Expand);
+
+    // Register float math libcalls with LLVM 22's RuntimeLibcalls system.
+    // Without these, Expand produces RTLIB::Unsupported and the backend aborts.
+    // f32 math (newlib libm provides these as expf, roundf, sinf, etc.)
+    setLibcallImpl(RTLIB::EXP_F32, RTLIB::impl_expf);
+    setLibcallImpl(RTLIB::EXP2_F32, RTLIB::impl_exp2f);
+    setLibcallImpl(RTLIB::LOG_F32, RTLIB::impl_logf);
+    setLibcallImpl(RTLIB::LOG2_F32, RTLIB::impl_log2f);
+    setLibcallImpl(RTLIB::LOG10_F32, RTLIB::impl_log10f);
+    setLibcallImpl(RTLIB::SIN_F32, RTLIB::impl_sinf);
+    setLibcallImpl(RTLIB::COS_F32, RTLIB::impl_cosf);
+    setLibcallImpl(RTLIB::POW_F32, RTLIB::impl_powf);
+    setLibcallImpl(RTLIB::REM_F32, RTLIB::impl_fmodf);
+    setLibcallImpl(RTLIB::SQRT_F32, RTLIB::impl_sqrtf);
+    setLibcallImpl(RTLIB::CEIL_F32, RTLIB::impl_ceilf);
+    setLibcallImpl(RTLIB::FLOOR_F32, RTLIB::impl_floorf);
+    setLibcallImpl(RTLIB::ROUND_F32, RTLIB::impl_roundf);
+    setLibcallImpl(RTLIB::TRUNC_F32, RTLIB::impl_truncf);
+    setLibcallImpl(RTLIB::NEARBYINT_F32, RTLIB::impl_nearbyintf);
+    setLibcallImpl(RTLIB::RINT_F32, RTLIB::impl_rintf);
+    setLibcallImpl(RTLIB::FMIN_F32, RTLIB::impl_fminf);
+    setLibcallImpl(RTLIB::FMAX_F32, RTLIB::impl_fmaxf);
+    setLibcallImpl(RTLIB::FMA_F32, RTLIB::impl_fmaf);
+    // f64 math
+    setLibcallImpl(RTLIB::EXP_F64, RTLIB::impl_exp);
+    setLibcallImpl(RTLIB::EXP2_F64, RTLIB::impl_exp2);
+    setLibcallImpl(RTLIB::LOG_F64, RTLIB::impl_log);
+    setLibcallImpl(RTLIB::LOG2_F64, RTLIB::impl_log2);
+    setLibcallImpl(RTLIB::LOG10_F64, RTLIB::impl_log10);
+    setLibcallImpl(RTLIB::SIN_F64, RTLIB::impl_sin);
+    setLibcallImpl(RTLIB::COS_F64, RTLIB::impl_cos);
+    setLibcallImpl(RTLIB::POW_F64, RTLIB::impl_pow);
+    setLibcallImpl(RTLIB::REM_F64, RTLIB::impl_fmod);
+    setLibcallImpl(RTLIB::SQRT_F64, RTLIB::impl_sqrt);
+    setLibcallImpl(RTLIB::CEIL_F64, RTLIB::impl_ceil);
+    setLibcallImpl(RTLIB::FLOOR_F64, RTLIB::impl_floor);
+    setLibcallImpl(RTLIB::ROUND_F64, RTLIB::impl_round);
+    setLibcallImpl(RTLIB::TRUNC_F64, RTLIB::impl_trunc);
+    setLibcallImpl(RTLIB::NEARBYINT_F64, RTLIB::impl_nearbyint);
+    setLibcallImpl(RTLIB::RINT_F64, RTLIB::impl_rint);
+    setLibcallImpl(RTLIB::FMIN_F64, RTLIB::impl_fmin);
+    setLibcallImpl(RTLIB::FMAX_F64, RTLIB::impl_fmax);
+    setLibcallImpl(RTLIB::FMA_F64, RTLIB::impl_fma);
+    // NOTE: Soft-float arithmetic (__addsf3, __truncdfsf2, etc.) and
+    // conversions are handled by the LowerMissingInstructions pass (--swfp),
+    // NOT via compiler-rt libcalls. Do NOT register them here.
+
+#ifdef TARGET64BIT
+    // FP conversions: f32<->f64. On 64-bit TTA, the instruction selector can
+    // generate fp_round/fp_extend nodes after LowerMissingInstructions has run.
+    // Expand them to compiler-rt libcalls, provided by softfloat_wrappers.c.
+    // On 32-bit TTA, LowerMissingInstructions handles all FP conversions.
+    setOperationAction(ISD::FP_EXTEND, MVT::f64, Expand);
+    setOperationAction(ISD::FP_ROUND, MVT::f32, Expand);
+    setLibcallImpl(RTLIB::FPROUND_F64_F32, RTLIB::impl___truncdfsf2);
+    setLibcallImpl(RTLIB::FPEXT_F32_F64, RTLIB::impl___extendsfdf2);
+    // Soft-float int<->float conversions (also needed post-isel on 64-bit)
+    setLibcallImpl(RTLIB::FPTOSINT_F32_I32, RTLIB::impl___fixsfsi);
+    setLibcallImpl(RTLIB::FPTOSINT_F64_I32, RTLIB::impl___fixdfsi);
+    setLibcallImpl(RTLIB::SINTTOFP_I32_F32, RTLIB::impl___floatsisf);
+    setLibcallImpl(RTLIB::SINTTOFP_I32_F64, RTLIB::impl___floatsidf);
+    setLibcallImpl(RTLIB::FPTOUINT_F32_I32, RTLIB::impl___fixunssfsi);
+    setLibcallImpl(RTLIB::FPTOUINT_F64_I32, RTLIB::impl___fixunsdfsi);
+    setLibcallImpl(RTLIB::UINTTOFP_I32_F32, RTLIB::impl___floatunsisf);
+    setLibcallImpl(RTLIB::UINTTOFP_I32_F64, RTLIB::impl___floatunsidf);
+#endif
 
     setOperationAction(ISD::ConstantFP, MVT::f64, Expand);
 

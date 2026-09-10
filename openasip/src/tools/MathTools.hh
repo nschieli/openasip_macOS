@@ -58,6 +58,17 @@ public:
     static int requiredBitsSigned(int number);
     static int requiredBitsSigned(UInt32 number);
     static int requiredBitsSigned(ULongWord number);
+#if SIZEOF_LONG == 8
+    // `long` and `long long` are ALWAYS distinct types in C++, even where both
+    // are 64 bits wide. int64_t is `long` on Linux LP64 but `long long` on
+    // macOS, so on macOS an int64_t argument matches none of the four
+    // overloads above exactly and every candidate needs an equal-rank integral
+    // conversion -- the call is ambiguous and fails to compile. These give
+    // int64_t/uint64_t an exact match. Additive on Linux: `long long` cannot
+    // collide with the SLongWord (= `long`) overload there either.
+    static int requiredBitsSigned(long long number);
+    static int requiredBitsSigned(unsigned long long number);
+#endif
     static SLongWord signExtendTo(SLongWord value, int width);
     static ULongWord zeroExtendTo(ULongWord value, int width);
     

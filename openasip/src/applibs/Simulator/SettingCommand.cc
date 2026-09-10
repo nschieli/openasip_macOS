@@ -160,6 +160,48 @@ public:
 };
 
 /**
+ * Setting action that toggles execution-order operation n-gram tracking.
+ */
+class SetNGramTracking {
+public:
+    static bool execute(
+        SimulatorInterpreter&, SimulatorFrontend& simFront, bool newValue) {
+        simFront.setOperationNGramTracking(newValue);
+        return true;
+    }
+
+    static const DataObject& defaultValue() {
+        static const DataObject defaultValue_("0");
+        return defaultValue_;
+    }
+
+    static bool warnOnExistingProgramAndMachine() {
+        return true;
+    }
+};
+
+/**
+ * Setting action that toggles per-function cycle-attribution tracking.
+ */
+class SetFunctionCyclesTracking {
+public:
+    static bool execute(
+        SimulatorInterpreter&, SimulatorFrontend& simFront, bool newValue) {
+        simFront.setFunctionCyclesTracking(newValue);
+        return true;
+    }
+
+    static const DataObject& defaultValue() {
+        static const DataObject defaultValue_("0");
+        return defaultValue_;
+    }
+
+    static bool warnOnExistingProgramAndMachine() {
+        return true;
+    }
+};
+
+/**
  * Setting action that sets the profile data saving.
  */
 class SetProfileSaving {
@@ -680,6 +722,17 @@ SettingCommand::SettingCommand() :
         new TemplatedSimulatorSetting<BooleanSetting, SetRFTracking>(
             SimulatorToolbox::textGenerator().text(
                 Texts::TXT_INTERP_SETTING_RFTRACKING).str());
+
+    settings_["n_gram_tracking"] =
+        new TemplatedSimulatorSetting<BooleanSetting, SetNGramTracking>(
+            SimulatorToolbox::textGenerator().text(
+                Texts::TXT_INTERP_SETTING_NGRAM_TRACKING).str());
+
+    settings_["function_cycles_tracking"] =
+        new TemplatedSimulatorSetting<
+            BooleanSetting, SetFunctionCyclesTracking>(
+                SimulatorToolbox::textGenerator().text(
+                    Texts::TXT_INTERP_SETTING_FUNCTION_CYCLES_TRACKING).str());
 
     settings_["history_filename"] =
         new TemplatedSimulatorSetting<StringSetting, SetHistoryFilename>(

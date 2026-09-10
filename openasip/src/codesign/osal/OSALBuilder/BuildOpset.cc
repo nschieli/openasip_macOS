@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "BuildOpset.hh"
+#include "Application.hh"
 #include "FileSystem.hh"
 #include "CmdLineOptions.hh"
 #include "Environment.hh"
@@ -176,14 +177,34 @@ int main(int argc, char* argv[]) {
         }
 
         // build and install the behavior module
+        //
+        // NOTE: key the success test off the COMPILER'S EXIT STATUS, not off
+        // whether it printed anything. buildObject() redirects 2>&1 into
+        // `output` and returns false only when the command exits non-zero, so
+        // the old `output.size() > 0` test failed the build on any WARNING.
+        // That is invisible with gcc/GNU ld, which are quiet here, but Apple's
+        // ld routinely emits warnings on a perfectly good link (duplicate
+        // -rpath, duplicate libraries, deprecated -bind_at_load). The result
+        // was that every .opb "failed to build" on macOS while in fact being
+        // built correctly.
         vector<string> output;
-        builder.buildObject(moduleName, behFile, path, output);
-        if (output.size() > 0) {
+        bool buildOk = builder.buildObject(moduleName, behFile, path, output);
+        if (!buildOk) {
             cerr << "Error building shared objects:" << endl;
             for (size_t i = 0; i < output.size(); i++) {
                 cerr << output[i] << endl;
             }
             return EXIT_FAILURE;
+        }
+        // The compiler succeeded but may still have diagnostics worth seeing.
+        // Show them only when asked, so a warning-per-operation does not bury
+        // the build log.
+        if (output.size() > 0 &&
+            Application::verboseLevel() > Application::VERBOSE_LEVEL_DEFAULT) {
+            cerr << "Warnings while building " << moduleName << ":" << endl;
+            for (size_t i = 0; i < output.size(); i++) {
+                cerr << output[i] << endl;
+            }
         }
 
     } catch (ParserStopRequest const&) {

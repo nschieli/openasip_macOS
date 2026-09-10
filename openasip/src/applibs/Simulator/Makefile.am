@@ -25,7 +25,9 @@ libsimulator_la_SOURCES = WritableState.cc ReadableState.cc StateData.cc \
 	BuslessExecutableMove.cc \
 	SimulationStatisticsCalculator.cc SimulationStatistics.cc \
 	UtilizationStats.cc StopPoint.cc StopPointManager.cc Watch.cc \
-	WatchCommand.cc RFAccessTracker.cc CommandsCommand.cc \
+	WatchCommand.cc RFAccessTracker.cc OperationNGramTracker.cc \
+	FunctionCyclesTracker.cc \
+	CommandsCommand.cc \
 	ProcedureTransferTracker.cc GuardState.cc FUResourceConflictDetector.cc \
 	FSAFUResourceConflictDetector.cc \
 	ResourceVectorFUResourceConflictDetector.cc \
@@ -152,7 +154,8 @@ libsimulator_la_SOURCES += \
 	LongImmediateUnitState.hh RunCommand.hh \
 	ResourceVectorFUResourceConflictDetector.hh PortState.hh \
 	MachineStateBuilder.hh OperationExecutor.hh \
-	RFAccessTracker.hh TransportPipeline.hh \
+	RFAccessTracker.hh OperationNGramTracker.hh FunctionCyclesTracker.hh \
+	TransportPipeline.hh \
 	OutputPortState.hh BPCommand.hh \
 	FUConflictDetectorIndex.hh SimpleOperationExecutor.hh \
 	InstructionMemory.hh DCMFUResourceConflictDetector.hh \

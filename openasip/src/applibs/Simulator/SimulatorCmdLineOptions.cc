@@ -70,9 +70,12 @@ const std::string SWL_CUSTOM_DBG = "custom";
 const std::string SWS_CUSTOM_DBG = "c"; 
 
 /// Long switch string for the TCE builtin remote debugger target
-const std::string SWL_REMOTE_DBG = "remote"; 
+const std::string SWL_REMOTE_DBG = "remote";
 /// Short switch string for the TCE builtin remote debugger target
-const std::string SWS_REMOTE_DBG = "r"; 
+const std::string SWS_REMOTE_DBG = "r";
+
+/// Long switch string for emitting the final cycle count.
+const std::string SWL_PRINT_CYCLES = "print-cycles";
 
 /**
  * Constructor.
@@ -116,6 +119,12 @@ SimulatorCmdLineOptions::SimulatorCmdLineOptions() : CmdLineOptions("") {
         new BoolCmdLineOptionParser(
             SWL_CUSTOM_DBG, "connect to a custom remote debugger (if implemented).",
             SWS_CUSTOM_DBG));
+
+     addOption(
+        new BoolCmdLineOptionParser(
+            SWL_PRINT_CYCLES,
+            "after the simulation run completes, print the final cycle "
+            "count to stdout as 'ttasim_cycles: <N>'."));
 }
 
 /**
@@ -154,12 +163,25 @@ SimulatorCmdLineOptions::printHelp() const {
  *
  * @return True if Simulator should be started in debugging mode.
  */
-bool 
+bool
 SimulatorCmdLineOptions::debugMode() {
     if (!optionGiven(SWL_DEBUG_MODE)) {
         return true;
     }
     return findOption(SWL_DEBUG_MODE)->isFlagOn();
+}
+
+/**
+ * Returns true if the simulator should print the final cycle count.
+ *
+ * @return True when --print-cycles was given on the command line.
+ */
+bool
+SimulatorCmdLineOptions::printCycles() {
+    if (!optionGiven(SWL_PRINT_CYCLES)) {
+        return false;
+    }
+    return findOption(SWL_PRINT_CYCLES)->isFlagOn();
 }
 
 /**

@@ -1316,8 +1316,10 @@ FUGen::scheduleOperations() {
                 accessCycle = operationCycles_[op] - schedule.finalCycle;
                 schedule.results.insert(i);
                 dir = ProGe::Direction::OUT;
+                bool isSigned = (osalOperand.type() == Operand::SINT_WORD ||
+                                 osalOperand.type() == Operand::SLONG_WORD);
                 OutputConnection out = {
-                    width, i, schedule.finalCycle, accessCycle, op};
+                    width, i, schedule.finalCycle, accessCycle, op, isSigned};
                 portInputs_.emplace(port, out);
             }
 
@@ -1741,12 +1743,34 @@ FUGen::createOutputPipeline() {
                         LHSSignal(opcodeConstant(connection.operation))),
                     triggered);
 
-                Ext source(
-                    operandSignal(connection.operation, connection.operandID),
-                    width, connection.operandWidth);
-
+                std::string srcSig =
+                    operandSignal(connection.operation, connection.operandID);
                 CodeBlock regAssignBlock;
-                regAssignBlock.append(Assign(nextReg, source));
+                // Use sign extension for signed OSAL operands (e.g., LD8 output is
+                // SIntWord/32-bit, but the bus and register are wider). Without this,
+                // negative values loaded via LD8 would be zero-extended to full bus
+                // width, corrupting the value.
+                // ⛔ A 1-BIT OPERAND IS A BOOLEAN, WHATEVER OSAL CALLS IT.
+                //    Sign-extending it turns a `true` of 1 into 0xffffffff.
+                //    MEASURED in base.opp: GT, NE and GE declare their result
+                //    SIntWord width=1 — OSAL's idiom for a predicate — while
+                //    EQ, GTU and LT use UIntWord and were unaffected, which is
+                //    why this broke only some comparisons.
+                //    tcetest_fugen compared RTL against ttasim and got
+                //    47,ffffffff where 47,00000001 was expected: exactly a
+                //    1-bit `1` sign-extended to -1.
+                // ⇒ The sign extension below exists for LD8/LD16, whose results
+                //   are SIntWord width=32 and genuinely need it. Excluding
+                //   width 1 keeps that and drops the booleans.
+                if (connection.isSignedOperand &&
+                        connection.operandWidth > 1 &&
+                        connection.operandWidth < width) {
+                    Sext source(srcSig, width, connection.operandWidth);
+                    regAssignBlock.append(Assign(nextReg, source));
+                } else {
+                    Ext source(srcSig, width, connection.operandWidth);
+                    regAssignBlock.append(Assign(nextReg, source));
+                }
                 if (generateROCC_) {
                     regAssignBlock.append(
                         Assign(nextConfigReg, LHSSignal("configs_in")));
@@ -1934,10 +1958,18 @@ FUGen::createOutputPipelineCVXIF() {
 
             if (pipestage ==
                 Nstage) {  // Assigning Operation outputs at the begining
-                Ext source(
-                    operandSignal(connected.operation, connected.operandID),
-                    width, connected.operandWidth);
-                outConfigsBlock.append(Assign(nextReg, source));
+                std::string srcSigCVX =
+                    operandSignal(connected.operation, connected.operandID);
+                // Same rule as above: width 1 is a boolean, never sign-extended.
+                if (connected.isSignedOperand &&
+                        connected.operandWidth > 1 &&
+                        connected.operandWidth < width) {
+                    Sext source(srcSigCVX, width, connected.operandWidth);
+                    outConfigsBlock.append(Assign(nextReg, source));
+                } else {
+                    Ext source(srcSigCVX, width, connected.operandWidth);
+                    outConfigsBlock.append(Assign(nextReg, source));
+                }
                 outConfigsBlock.append(
                     Assign(nextConfigBits, LHSSignal("configbits_" + op)));
             } else {  // Assigning rest of the pipelining stages

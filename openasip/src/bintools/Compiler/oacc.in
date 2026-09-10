@@ -32,11 +32,39 @@
 import os, sys, subprocess, optparse, shutil, glob, signal
 import os.path
 import re
+import multiprocessing
 
 from tempfile import mkdtemp, mkstemp
 from optparse import OptionParser
 from shutil import rmtree
 from subprocess import Popen, PIPE
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def archiveTool():
+    """Returns an archiver that can read the bitcode libraries we ship.
+
+    The newlib libraries built for TTA contain LLVM BITCODE members, and the
+    archives are written by llvm-ar, which uses the GNU archive format
+    (including the '//' long-filename string table).
+
+    The cctools `ar` that macOS ships understands only the BSD format. Pointed
+    at one of these archives it does not fail loudly -- it misreads the string
+    table AS MEMBER NAMES:
+
+        $ /usr/bin/ar t libc.a
+        /
+        //
+        /0
+        /18
+
+    so `ar x` then tries to create files called '/3036' and reports
+    "Read-only file system", leaving the extraction silently empty. GNU ar
+    reads the format natively, which is why this only breaks on macOS/BSD.
+
+    Prefer llvm-ar, which always matches whatever llvm-ar wrote, and fall back
+    to plain `ar` if the LLVM tools are not on PATH.
+    """
+    return shutil.which("llvm-ar") or "ar"
 
 def runCommandBuffered(command, echoOutput, applyStdErr = True, stripOutput = True):
     """Runs a command and prints everything if requested."""
@@ -141,6 +169,69 @@ def loadTextData(file_name):
 
     return open(os.path.join(dataDir, file_name), 'r').read()
 
+
+def _advise(message):
+    """Write an ADVISORY message -- a warning or a note, never an error.
+
+    Advisory output goes to stderr and ONLY when stderr is a terminal.
+
+    ⛔ THE REASON IS NOT COSMETIC AND IT HAS NOW BITTEN THREE TIMES.
+    tools/scripts/systemtest.py runs each command with combinedOutput, which
+    assigns stdout and stderr THE SAME file descriptor, so anything written to
+    either lands in produced.stdout and is compared against upstream's golden
+    files. Any line oacc adds that upstream does not print fails every
+    golden-output test that reaches it, wherever it was written.
+
+    The first two instances were the parallel-compile progress header and the
+    per-file counter. A third was a missing-headers warning, which broke
+    procgen/hpu/test_hpu_embedded and RegressionTests/bool_return_value --
+    found by RUNNING the suite, not by reading the diff, which is exactly how
+    the second one was found too.
+
+    ⇒ So this is a HELPER rather than a third inline gate. Route advisory
+    output through here and a fourth instance cannot drift, which a repeated
+    `if not verbose and _stderrIsATerminal():` idiom could not promise.
+
+    ⚠ Errors do NOT belong here. A failing run's output is not compared
+    against a golden, and an error must be visible in a log. Use
+    exitWithError() or a bare write for those.
+    """
+    if _stderrIsATerminal():
+        sys.stderr.write(message)
+        sys.stderr.flush()
+
+
+def _stderrIsATerminal():
+    """True when stderr is attached to a terminal, i.e. a human is watching.
+
+    Guarded because isatty() is not guaranteed to exist on a replaced stderr
+    (embedding, capture shims); when in doubt, stay quiet -- a missing progress
+    line is harmless, an unexpected one breaks golden-output comparisons.
+    """
+    try:
+        return sys.stderr.isatty()
+    except Exception:
+        return False
+
+
+# Worker function for parallel compilation (must be at module level for pickling)
+def _compileOneFile(args):
+    """Compile a single source file to bitcode. Returns (outFileName, exitCode, stderr).
+
+    This function runs in a subprocess pool — it must not access global mutable
+    state or call exitWithError (which tries to clean up the temp directory).
+    """
+    command, outFileName, verbose = args
+    proc = Popen(command, shell=True, stdin=PIPE, stdout=PIPE, stderr=PIPE,
+                 close_fds=False)
+    stdout, stderr = proc.communicate()
+    stderr_str = stderr.decode('utf-8', errors='replace').strip()
+    if verbose:
+        stdout_str = stdout.decode('utf-8', errors='replace').strip()
+        return (outFileName, proc.returncode, command + "\n" + stdout_str + "\n" + stderr_str)
+    return (outFileName, proc.returncode, stderr_str)
+
+
 # TODO: add support for ll and check if file is .bc object from magic number...
 def processInputFiles(inFiles, tmpDir, options, tceopsDir=None):
     """ Compiles input files to .bc files and returns list
@@ -214,253 +305,397 @@ def processInputFiles(inFiles, tmpDir, options, tceopsDir=None):
         exitWithError(
             1,
             "There must be at least one input file given.\n")
-    else:
-        for fName in inFiles:
-            # check file type based on knownSuffices
-            baseName = ""
-            suffix = ""
-            temp_file = None
-            # The OpenCL C device specific header file that is
-            # generated from the ADF.
-            device_header = None
-            for i in range(len(knownSuffices)):
-                testSuffix = knownSuffices[i]
-                suffixStart = fName.rfind(testSuffix)
 
-                if suffixStart != -1:
-                    suffix = fName[suffixStart:len(fName)]
-                    baseName = fName[0:suffixStart]
+    # --- Phase 1: Prepare all compilation commands ---
+    # Separate command preparation from execution so we can parallelize.
+    # Each entry: (outFileName, command, temp_file, device_header, fName)
+    # command="" means no compilation needed (e.g. .bc, .a passthrough).
+    compileTasks = []     # [(command, outFileName, fName)]
+    passthroughFiles = [] # [(outFileName,)] — no compilation needed
+    oclTasks = []         # [(fName, baseName, suffix, extra_opts, outFileName)] — OpenCL needs special handling
 
-                    if suffix == testSuffix:
-                        break
-                    else:
-                        baseName = ""
-                        suffix = ""
+    for fName in inFiles:
+        # check file type based on knownSuffices
+        baseName = ""
+        suffix = ""
+        for i in range(len(knownSuffices)):
+            testSuffix = knownSuffices[i]
+            suffixStart = fName.rfind(testSuffix)
 
-            if baseName != "" and suffix != "":
-                # gen command for compiling, for files that need to
-                # be compiled first
-                command = ""
+            if suffixStart != -1:
+                suffix = fName[suffixStart:len(fName)]
+                baseName = fName[0:suffixStart]
 
-                extra_opts = "-mllvm --disable-loop-idiom-memcpy " +\
-                             "-mllvm --disable-loop-idiom-memset "
-                if options.language != "":
-                    extra_opts += "-x %s " % options.language
+                if suffix == testSuffix:
+                    break
+                else:
+                    baseName = ""
+                    suffix = ""
 
-                # Disable generation of fmuladd intrinsics automatically in
-                # case soft float is used. This causes problems because the
-                # intrinsics is lowered later after emulated instructions are
-                # figured after which it's too late to try to lower it to fmul + fadd or
-                # fmac (which need to be emulated). This is not the best
-                # possible fix, but soft float should not be used for
-                # performance critical FP code anyways.
-                # Version 14 onwards this is on by default. We must compile
-                # Newlib with this disabled so that soft floats work.
-                # A better solution would be to emulate also the fmuladd intrinsics.
+        if baseName == "" or suffix == "":
+            exitWithError(
+                1,
+                "Unknown input file type.")
 
+        # gen command for compiling, for files that need to
+        # be compiled first
+        command = ""
+
+        extra_opts = "-mllvm --disable-loop-idiom-memcpy " +\
+                     "-mllvm --disable-loop-idiom-memset "
+        if options.language != "":
+            extra_opts += "-x %s " % options.language
+
+        # Disable generation of fmuladd intrinsics automatically in
+        # case soft float is used. This causes problems because the
+        # intrinsics is lowered later after emulated instructions are
+        # figured after which it's too late to try to lower it to fmul + fadd or
+        # fmac (which need to be emulated). This is not the best
+        # possible fix, but soft float should not be used for
+        # performance critical FP code anyways.
+        # Version 14 onwards this is on by default. We must compile
+        # Newlib with this disabled so that soft floats work.
+        # A better solution would be to emulate also the fmuladd intrinsics.
+
+        extra_opts += " -ffp-contract=off"
+
+        if options.soft_float or not options.autovectorize:
+            extra_opts += " -fno-vectorize -fno-slp-vectorize"
+
+        if options.unroll_threshold == 0:
+            extra_opts += " -fno-unroll-loops"
+        else:
+            extra_opts += " -mllvm --unroll-threshold=" + str(options.unroll_threshold)
+
+        if options.inline_threshold == 0 or options.noinline:
+            extra_opts += " -fno-inline-functions"
+        else:
+            extra_opts += " -mllvm --inline-threshold=" + str(options.inline_threshold)
+
+        # Use basename for the output file name. When multiple
+        # source files share the same basename (e.g.,
+        # tensorflow/lite/kernels/kernel_util.cc and
+        # tensorflow/lite/micro/kernels/kernel_util.cc),
+        # use path-based naming to avoid collisions.
+        simpleBase = os.path.basename(baseName)
+        candidate = tmpDir + "/" + simpleBase + ".o"
+        existing_outs = [t[1] for t in compileTasks] + \
+                        [p[0] for p in passthroughFiles]
+        if candidate in existing_outs:
+            outFileName = tmpDir + "/" + baseName.replace("/", ".") + ".o"
+        else:
+            outFileName = candidate
+
+        if suffix == ".c":
+            command =  ("clang -D__TCEMC__ -O%d %s %s -emit-llvm -c "\
+                            "-I" + tmpDir +\
+                            " " + compileFlags + " " + extra_opts + " " + baseName + suffix + " -o " +\
+                            outFileName + ".tobelowered;" ) % \
+                            (options.frontend_optlevel, \
+                                 tripleOption, triple)
+
+            command += lowerMemIntrinsicCommand(outFileName + ".tobelowered", outFileName)
+
+        elif suffix == ".cl":
+            # OpenCL requires interactive multi-step compilation
+            # (header generation, pocl-standalone, trampoline).
+            # Cannot be parallelized — handle sequentially.
+            oclTasks.append((fName, baseName, suffix, extra_opts, outFileName))
+            continue
+
+        elif suffix == ".cpp" or suffix == ".cc":
+            input_file = baseName + suffix
+
+            if options.soft_float:
                 extra_opts += " -ffp-contract=off"
 
-                if options.soft_float or not options.autovectorize:
-                    extra_opts += " -fno-vectorize -fno-slp-vectorize"
+            if options.std:
+                extra_opts += " --std=%s" % options.std
+            else:
+                # Use gnu++17 (not c++17) to preserve newlib extensions
+                # like iprintf. c++17 defines __STRICT_ANSI__ which
+                # hides non-standard functions.
+                extra_opts += " --std=gnu++17"
 
-                if options.unroll_threshold == 0:
-                    extra_opts += " -fno-unroll-loops"
-                else:
-                    extra_opts += " -mllvm --unroll-threshold=" + str(options.unroll_threshold)
-
-                if options.inline_threshold == 0 or options.noinline:
-                    extra_opts += " -fno-inline-functions"
-                else:
-                    extra_opts += " -mllvm --inline-threshold=" + str(options.inline_threshold)
-
-                outFileName = tmpDir + "/" + os.path.basename(baseName) + ".o"
-                if suffix == ".c":
-                    # -O greater than 0 seems to modify loops in such a way
-                    # that trip counts cannot be analyzed. TODO: check why it
-                    # is so because it affects loop unrolling also (if trip
-                    # counts are unknown) and fix/report to LLVM upstream.
-                    command =  ("clang -D__TCEMC__ -O%d %s %s -emit-llvm -c "\
-                                    "-I" + tmpDir +\
-                                    " " + compileFlags + " " + extra_opts + " " + baseName + suffix + " -o " +\
-                                    outFileName + ".tobelowered;" ) % \
-                                    (options.frontend_optlevel, \
-                                         tripleOption, triple)
-
-                    command += lowerMemIntrinsicCommand(outFileName + ".tobelowered", outFileName)
-
-                elif suffix == ".cl":
-
-                    if options.adf_file == "":
-                        exitWithError(1, "ADF file required when compiling OpenCL kernels.")
-
-                    extra_flags = ""
-                    if options.soft_float:
-                        extra_flags += " POCL_VECTORIZE_NO_FP=1 "
-                        print("You are compiling OpenCL code with software floating point emulation!")
-                        print("Expect abysmal peformance!")
-
-                    input_file = baseName + suffix
-                    oclextgen = os.path.join(tceOclExtGenDir, "tceoclextgen") + " "  + options.adf_file
-
-                    # Generate the ADF specific header file with extension
-                    # functions for (custom) operations etc.
-                    device_header = mkstemp("_oclext.h", dir=tempDir)
-
-                    exitCode = runCommand(oclextgen, options.verbose, echoStderr=True,
-                                          stdoutFD=device_header[0])
-
-                    if exitCode != 0:
-                        os.unlink(device_header[1])
-                        exitWithError(
-                            1,
-                            "Error while generating the OpenCL C device header.\n")
-
-                    # Generate the parallelized bitcode, the trampoline and the kernel
-                    # registration object.
-                    cpp_trampoline = mkstemp("_ocl_launcher.cpp", dir=tempDir)[1]
-                    kernel_bc = mkstemp("_kernel.o", dir=tempDir)[1]
-
-                    runCommand(('EXTRA_CLANG_FLAGS="-D__TCE_DEVICE__ %s %s -fasm -include %s" ' % \
-                                (tripleOption, triple, device_header[1])) + \
-                               "%s pocl-standalone -t tce -h %s -o %s %s" % \
-                               (extra_flags, cpp_trampoline, kernel_bc, input_file),
-                               options.verbose, echoStderr=True)
-                    if exitCode != 0:
-                        exitWithError(
-                            1, "Error while compiling the OpenCL C file %s.\n" % input_file)
-
-                    def compile(input, output):
-                        extra_opts = ""
-                        if options.soft_float:
-                            extra_opts += "-ffp-contract=off"
-
-                        command = ("clang %s %s " + \
-                                       "-emit-llvm -O3 "\
-                                       "-c -I" + tmpDir +\
-                                       " " + input + " " + extra_opts + \
-                                       " %s `pkg-config pocl --cflags`" + \
-                                       " -o " + output) % \
-                                       (tripleOption, triple,  \
-                                       "-I " + tceSAOpenCLIncDir + " "  + newlibIncludes(options))
-                        exitCode = runCommand(command, options.verbose, echoStderr=True)
-                        if exitCode != 0:
-                            exitWithError(1, "Error while compiling %s." % input)
-
-                    # append the trampoline functions and the registration object
-                    # after the kernel information macros generated by the
-                    # pocl-standalone script
-
-                    class OpenCLKernelInfo(object):
-                        def __init__(self, name, arg_count):
-                            self.name = name
-                            self.arg_count = int(arg_count)
-
-                    kernels = []
-                    # figure out the kernel names from the generated header file
-                    tfr = open(cpp_trampoline, 'r')
-                    for line in tfr.readlines():
-                        m = re.search(r'#define\s_(\S+)_NUM_ARGS\s(\d+)', line)
-                        if m is not None:
-                            kernels.append(OpenCLKernelInfo(m.group(1), m.group(2)))
-                    tfr.close()
-
-                    tf = open(cpp_trampoline, 'a')
-                    tf.write(loadTextData("oclc_launcher_header.c"))
-
-                    trampoline_func_template = loadTextData("oclc_launcher_single.c")
-                    # Generate the argument lists for the kernel workgroup
-                    # function declaration and invocation.
-                    for kernel in kernels:
-                        count = 0
-                        converted_name = "_" + kernel.name + "_workgroup"
+            # Default C++ flags for TTA targets:
+            # - no exceptions/RTTI (runtime does not support them)
+            # - no __cxa_atexit (single-DSO target, avoids __dso_handle)
+            # Users can override by passing -fexceptions, -frtti, or
+            # -fuse-cxa-atexit.
+            user_f_flags = getattr(options, 'f_cc_switches', [])
+            if 'exceptions' not in user_f_flags:
+                extra_opts += " -fno-exceptions"
+            if 'rtti' not in user_f_flags:
+                extra_opts += " -fno-rtti"
+            if 'use-cxa-atexit' not in user_f_flags:
+                extra_opts += " -fno-use-cxa-atexit"
 
 
-                        # Add a class that registers the kernel to host API's kernel
-                        # registry at program startup
-                        initializer_object = loadTextData("oclc_initializer_object.cc") % \
-                            {'kernel_name' : kernel.name}
+            command = ("clang -D__TCEMC__ %s %s %s -emit-llvm " +\
+                            "-O%d "\
+                            "-c -I" + tmpDir + \
+                            " " + compileFlags + " " + input_file + " -o " +\
+                            outFileName + ".tobelowered1;") % \
+                            (tripleOption, triple, extra_opts, options.frontend_optlevel)
 
-                        trampoline_func = trampoline_func_template % {\
-                                  'kernel_name' : kernel.name,
-                                  'converted_name' : converted_name} + \
-                                  initializer_object
-
-                        tf.write(trampoline_func + "\n")
-
-                    tf.close()
-
-                    trampoline_bc = cpp_trampoline + ".o"
-                    compile(cpp_trampoline, trampoline_bc)
-
-                    # Link the trampoline (+registration object) and the kernel together.
-                    command = "llvm-link --suppress-warnings %s %s -o %s.tobelowered;" % \
-                               (kernel_bc, trampoline_bc, outFileName)
-
-                    command += lowerMemIntrinsicCommand(outFileName + ".tobelowered", outFileName)
-
-                elif suffix == ".cpp" or suffix == ".cc":
-                    input_file = baseName + suffix
-
-                    if options.soft_float:
-                        extra_opts += " -ffp-contract=off"
-
-                    if options.std:
-                        extra_opts += " --std=%s" % options.std
-
-                    command = ("clang %s %s %s -emit-llvm " +\
-                                    "-O%d "\
-                                    "-c -I" + tmpDir + \
-                                    " " + compileFlags + " " + input_file + " -o " +\
-                                    outFileName + ".tobelowered1;") % \
-                                    (tripleOption, triple, extra_opts, options.frontend_optlevel)
-
-                    # For some reason C++ code does not get mallocs lowered to
-                    # calls by the frontend, do it manually here with the -lowerallocs
-                    # pass.
-                    # lowerallocs removed in 2.7?
-                    #command += "opt -lowerallocs %s -o %s;" % \
+            # For some reason C++ code does not get mallocs lowered to
+            # calls by the frontend, do it manually here with the -lowerallocs
+            # pass.
+            # lowerallocs removed in 2.7?
+            #command += "opt -lowerallocs %s -o %s;" % \
 #                        (outFileName + ".tobelowered1", outFileName + ".tobelowered")
 
-                    command += lowerMemIntrinsicCommand(outFileName + ".tobelowered1", outFileName)
+            command += lowerMemIntrinsicCommand(outFileName + ".tobelowered1", outFileName)
 
-                elif suffix == ".ll":
-                    command = ("llvm-as " + baseName + suffix + " -o " + outFileName + ".tobelowered;")
+        elif suffix == ".ll":
+            command = ("llvm-as " + baseName + suffix + " -o " + outFileName + ".tobelowered;")
 
-                    command += lowerMemIntrinsicCommand(outFileName + ".tobelowered", outFileName)
+            command += lowerMemIntrinsicCommand(outFileName + ".tobelowered", outFileName)
 
-                elif suffix == ".o" or (suffix == ".bc" and options.force_link):
-                    outFileName = fName + ".bc"
-                    command += lowerMemIntrinsicCommand(fName, outFileName)
+        elif suffix == ".o" or (suffix == ".bc" and options.force_link):
+            outFileName = fName + ".bc"
+            command += lowerMemIntrinsicCommand(fName, outFileName)
 
-                elif suffix == ".bc":
-                    # Nothing to be done for the fully linked bitcode files.
-                    outFileName = fName
+        elif suffix == ".bc":
+            # Nothing to be done for the fully linked bitcode files.
+            outFileName = fName
 
-                elif suffix == ".a":
-                    outFileName = fName
+        elif suffix == ".a":
+            outFileName = fName
 
-                # add all files to list for linkage
-                linkList += [outFileName]
+        if command != "":
+            compileTasks.append((command, outFileName, fName))
+        else:
+            passthroughFiles.append((outFileName,))
 
-                if command != "":
-                    exitCode = runCommand(command, options.verbose, echoStderr=True)
+    # --- Phase 2: Execute compilations ---
+    parallel_jobs = getattr(options, 'parallel_jobs', 0)
+    if parallel_jobs == 0:
+        try:
+            parallel_jobs = multiprocessing.cpu_count()
+        except NotImplementedError:
+            parallel_jobs = 1
+    verbose = options.verbose
+
+    # Determine effective job count
+    numCompileTasks = len(compileTasks)
+    if numCompileTasks <= 1 or parallel_jobs == 1:
+        # Sequential execution — original behavior
+        for command, outFileName, fName in compileTasks:
+            exitCode = runCommand(command, verbose, echoStderr=True)
+            if exitCode != 0:
+                exitWithError(
+                    1,
+                    "Error while compiling file: " +\
+                    os.path.basename(fName) + "\n")
+            linkList.append(outFileName)
+    else:
+        # Parallel execution
+        numWorkers = min(parallel_jobs, numCompileTasks)
+        # ⛔ PROGRESS IS PRINTED ONLY WHEN A HUMAN IS WATCHING. Upstream's oacc
+        #    writes nothing here, so every golden-output systemtest that compiles
+        #    more than one file compared against output without this line and
+        #    FAILED: tce_tour_vhdl, tce_tour_verilog and PIG/compressors all
+        #    broke on "Compiling N files using N parallel jobs...".
+        # ⇒ MOVING IT TO stderr DOES NOT FIX THAT, and that was tried first.
+        #   tools/scripts/systemtest.py runs each command with combinedOutput,
+        #   which assigns stdout and stderr THE SAME file descriptor -- so a
+        #   line written to stderr lands in produced.stdout regardless. The
+        #   golden files are upstream's; the only way to match them is to write
+        #   nothing at all when the output is being captured.
+        # ⇒ isatty() is the right test because it asks the question that
+        #   actually matters: is there a terminal to show progress to? A test
+        #   harness, a Makefile capturing output and a user's pipeline all
+        #   answer no, and all of them want upstream's byte-exact stdout.
+        # ONE decision for every progress write below, evaluated once.
+        showProgress = _stderrIsATerminal()
+        if not verbose and showProgress:
+            sys.stderr.write("Compiling %d files using %d parallel jobs...\n" %
+                             (numCompileTasks, numWorkers))
+            sys.stderr.flush()
+
+        # NOTE: a THREAD pool, deliberately, not multiprocessing.
+        #
+        # _compileOneFile() only spawns a subprocess and waits for it, so the
+        # work is entirely I/O-bound and threads parallelise it just as well --
+        # the GIL is released while waiting.
+        #
+        # multiprocessing.Pool was actively BROKEN here on macOS. This script
+        # has no `if __name__ == "__main__":` guard, and on macOS Python's
+        # default start method is "spawn" (it is "fork" on Linux). Under spawn
+        # each worker RE-IMPORTS the main module, so every worker re-ran oacc's
+        # top-level code, reached this function again, and created another Pool
+        # -- a recursive process explosion that ended in
+        #     RuntimeError: An attempt has been made to start a new process
+        #     before the current process has finished its bootstrapping phase.
+        # Threads sidestep the fork/spawn difference entirely, need no pickling
+        # of the work items, and behave identically on both platforms.
+        completed = 0
+        work = [(cmd, outFn, verbose) for cmd, outFn, fName in compileTasks]
+        with ThreadPoolExecutor(max_workers=numWorkers) as pool:
+            futures = [pool.submit(_compileOneFile, w) for w in work]
+            try:
+                for future in as_completed(futures):
+                    outFileName, exitCode, errMsg = future.result()
+                    completed += 1
                     if exitCode != 0:
+                        for f in futures:
+                            f.cancel()
+                        sys.stderr.write(errMsg + "\n")
                         exitWithError(
                             1,
                             "Error while compiling file: " +\
-                            baseName + suffix + "\n")
-                    else:
-                        if temp_file is not None:
-                            add_garbage(temp_file[1])
-                            temp_file = None
-                        if device_header is not None:
-                            add_garbage(device_header[1])
-                            device_header = None
+                            os.path.basename(outFileName) + "\n")
+                    if verbose and errMsg:
+                        # a compiler diagnostic, so stderr — same reasoning as
+                        # the progress lines; only the verbose path reaches it,
+                        # but an error on stdout is the same defect waiting.
+                        sys.stderr.write(errMsg + "\n")
+                    elif not verbose and showProgress:
+                        # Terminal only, per the note above: a \r-updated
+                        # counter is meaningless in a captured stream and
+                        # breaks upstream's golden stdout.
+                        sys.stderr.write("\r  [%d/%d] compiled" %
+                                         (completed, numCompileTasks))
+                        sys.stderr.flush()
+                    linkList.append(outFileName)
+            except KeyboardInterrupt:
+                for f in futures:
+                    f.cancel()
+                raise
+        if not verbose and showProgress:
+            # terminates the \r-updated progress line
+            sys.stderr.write("\n")
+            sys.stderr.flush()
 
-            else:
-                exitWithError(
-                    1,
-                    "Unknown input file type.")
+    # Add passthrough files
+    for (outFileName,) in passthroughFiles:
+        linkList.append(outFileName)
+
+    # --- Phase 3: Handle OpenCL files sequentially ---
+    # OpenCL compilation involves interactive multi-step processes
+    # (header generation, pocl-standalone, trampoline building)
+    # that cannot be safely parallelized.
+    for fName, baseName, suffix, extra_opts, outFileName in oclTasks:
+        if options.adf_file == "":
+            exitWithError(1, "ADF file required when compiling OpenCL kernels.")
+
+        extra_flags = ""
+        if options.soft_float:
+            extra_flags += " POCL_VECTORIZE_NO_FP=1 "
+            print("You are compiling OpenCL code with software floating point emulation!")
+            print("Expect abysmal peformance!")
+
+        input_file = baseName + suffix
+        oclextgen = os.path.join(tceOclExtGenDir, "tceoclextgen") + " "  + options.adf_file
+
+        # Generate the ADF specific header file with extension
+        # functions for (custom) operations etc.
+        device_header = mkstemp("_oclext.h", dir=tempDir)
+
+        exitCode = runCommand(oclextgen, options.verbose, echoStderr=True,
+                              stdoutFD=device_header[0])
+
+        if exitCode != 0:
+            os.unlink(device_header[1])
+            exitWithError(
+                1,
+                "Error while generating the OpenCL C device header.\n")
+
+        # Generate the parallelized bitcode, the trampoline and the kernel
+        # registration object.
+        cpp_trampoline = mkstemp("_ocl_launcher.cpp", dir=tempDir)[1]
+        kernel_bc = mkstemp("_kernel.o", dir=tempDir)[1]
+
+        runCommand(('EXTRA_CLANG_FLAGS="-D__TCE_DEVICE__ %s %s -fasm -include %s" ' % \
+                    (tripleOption, triple, device_header[1])) + \
+                   "%s pocl-standalone -t tce -h %s -o %s %s" % \
+                   (extra_flags, cpp_trampoline, kernel_bc, input_file),
+                   options.verbose, echoStderr=True)
+        if exitCode != 0:
+            exitWithError(
+                1, "Error while compiling the OpenCL C file %s.\n" % input_file)
+
+        def compile(input, output):
+            extra_opts = ""
+            if options.soft_float:
+                extra_opts += "-ffp-contract=off"
+
+            command = ("clang %s %s " + \
+                           "-emit-llvm -O3 "\
+                           "-c -I" + tmpDir +\
+                           " " + input + " " + extra_opts + \
+                           " %s `pkg-config pocl --cflags`" + \
+                           " -o " + output) % \
+                           (tripleOption, triple,  \
+                           "-I " + tceSAOpenCLIncDir + " "  + newlibIncludes(options))
+            exitCode = runCommand(command, options.verbose, echoStderr=True)
+            if exitCode != 0:
+                exitWithError(1, "Error while compiling %s." % input)
+
+        # append the trampoline functions and the registration object
+        # after the kernel information macros generated by the
+        # pocl-standalone script
+
+        class OpenCLKernelInfo(object):
+            def __init__(self, name, arg_count):
+                self.name = name
+                self.arg_count = int(arg_count)
+
+        kernels = []
+        # figure out the kernel names from the generated header file
+        tfr = open(cpp_trampoline, 'r')
+        for line in tfr.readlines():
+            m = re.search(r'#define\s_(\S+)_NUM_ARGS\s(\d+)', line)
+            if m is not None:
+                kernels.append(OpenCLKernelInfo(m.group(1), m.group(2)))
+        tfr.close()
+
+        tf = open(cpp_trampoline, 'a')
+        tf.write(loadTextData("oclc_launcher_header.c"))
+
+        trampoline_func_template = loadTextData("oclc_launcher_single.c")
+        # Generate the argument lists for the kernel workgroup
+        # function declaration and invocation.
+        for kernel in kernels:
+            count = 0
+            converted_name = "_" + kernel.name + "_workgroup"
+
+
+            # Add a class that registers the kernel to host API's kernel
+            # registry at program startup
+            initializer_object = loadTextData("oclc_initializer_object.cc") % \
+                {'kernel_name' : kernel.name}
+
+            trampoline_func = trampoline_func_template % {\
+                      'kernel_name' : kernel.name,
+                      'converted_name' : converted_name} + \
+                      initializer_object
+
+            tf.write(trampoline_func + "\n")
+
+        tf.close()
+
+        trampoline_bc = cpp_trampoline + ".o"
+        compile(cpp_trampoline, trampoline_bc)
+
+        # Link the trampoline (+registration object) and the kernel together.
+        command = "llvm-link --suppress-warnings %s %s -o %s.tobelowered;" % \
+                   (kernel_bc, trampoline_bc, outFileName)
+
+        command += lowerMemIntrinsicCommand(outFileName + ".tobelowered", outFileName)
+
+        linkList += [outFileName]
+
+        exitCode = runCommand(command, options.verbose, echoStderr=True)
+        if exitCode != 0:
+            exitWithError(
+                1,
+                "Error while compiling file: " +\
+                baseName + suffix + "\n")
+        else:
+            add_garbage(device_header[1])
+
     return linkList
 
 def exitWithError(status, errorMessage=None):
@@ -532,7 +767,7 @@ def linkBytecode(linkFiles, fileNamePrefix, verbose):
             runCommand("cp " + name + " " + libDirName, options.verbose, echoStderr=True)
 
         for name in os.listdir(libDirName):
-            runCommand("sh -c 'cd " + libDirName + ";ar x " + libDirName + "/" + name + "'", options.verbose, echoStderr=True)
+            runCommand("sh -c 'cd " + libDirName + ";" + archiveTool() + " x " + libDirName + "/" + name + "'", options.verbose, echoStderr=True)
             runCommand("rm " + libDirName + "/" + name, options.verbose, echoStderr=True)
 
     defSyms=['llvm.dbg.declare']
@@ -720,7 +955,10 @@ def optimizeBytecode(inFile, fileNamePrefix, extraSwitches = ""):
         optSwitches += ' -' + ' -'.join(extra_opts)
 
     internalize_api_list = " -internalize-public-api-list=" \
-                           "_start,_pthread_start,_dthread_start,memcpy,memset"
+                           "_start,_pthread_start,_dthread_start,memcpy,memset,__dso_handle" \
+                           ",__truncdfsf2,__extendsfdf2" \
+                           ",__fixsfsi,__fixdfsi,__fixunssfsi,__fixunsdfsi" \
+                           ",__floatsisf,__floatsidf,__floatunsisf,__floatunsidf"
     if options.keep_symbols != "":
         internalize_api_list += "," + options.keep_symbols
 
@@ -775,7 +1013,10 @@ def linkEmulationFuncs(inFile, fileNamePrefix):
     outputName = fileNamePrefix + "_emul_internalized.bc"
 
     internalize_api_list = " -internalize-public-api-list=" \
-                           "_start,_pthread_start,memcpy,memset"
+                           "_start,_pthread_start,memcpy,memset,__dso_handle" \
+                           ",__truncdfsf2,__extendsfdf2" \
+                           ",__fixsfsi,__fixdfsi,__fixunssfsi,__fixunsdfsi" \
+                           ",__floatsisf,__floatsidf,__floatunsisf,__floatunsidf"
     if options.keep_symbols != "":
         internalize_api_list += "," + options.keep_symbols
 
@@ -875,7 +1116,7 @@ class SourceLib(object):
                                         for tmp in tmp_comp_options]
                 self.compiler_options = tmp_comp_options
 
-    def build(self, targetPath):
+    def build(self, targetPath, parent_options=None):
         """Builds the source lib to a set of bitcode objects."""
         dirName = os.path.join(targetPath, "sourcelib" + self.libname)
         # We might have already expanded the library archive if we are using
@@ -888,6 +1129,12 @@ class SourceLib(object):
         compilerOptions, inFiles = optionParser.parse_args(self.compiler_options)
         compilerOptions.compile_only = True
         compilerOptions.frontend_optlevel = 1
+
+        # Inherit include paths and relevant flags from parent options
+        if parent_options is not None:
+            for attr in ['include_dirs', 'parallel_jobs']:
+                if hasattr(parent_options, attr):
+                    setattr(compilerOptions, attr, getattr(parent_options, attr))
 
         return processInputFiles(sourceFiles, dirName, compilerOptions, targetPath)
 
@@ -1316,6 +1563,14 @@ p.add_option('--little-endian64',
              action="store_true", dest='little_endian64', default=False,
              help="Compile using the little-endian 64-bit TCE target.")
 
+p.add_option('-j', '--parallel-jobs',
+             type="int", action="store", metavar='N',
+             dest="parallel_jobs", default=0,
+             help="Number of parallel compilation jobs. "
+                  "0 = auto-detect (number of CPU cores). "
+                  "1 = sequential (original behavior). "
+                  "Default: 0 (auto).")
+
 p.add_option('--no-emulationlib',
              action="store_true", dest="no_emulationlib", default=False,
              help="Do not compile the emulationLib. Code which requires division or multiplication may fail if the processor does not have multiplier or divider." )
@@ -1345,6 +1600,13 @@ for opt in sys.argv[1:]:
 
 # parse valid args
 options, inFiles = p.parse_args(args)
+
+# Resolve parallel jobs: 0 = auto-detect CPU count
+if options.parallel_jobs == 0:
+    try:
+        options.parallel_jobs = multiprocessing.cpu_count()
+    except NotImplementedError:
+        options.parallel_jobs = 1
 
 if options.tce_build_mode:
     # Ensure we find the OSAL directories to produce the tceopgen macros for
@@ -1390,7 +1652,7 @@ if options.clear_cache:
     sys.exit(0)
 
 if options.list_langs:
-    supported_languages = ["ISO C99 (c)", "C++ (c++)"]
+    supported_languages = ["ISO C99 (c)"]
     if isOpenCLEnabled():
         supported_languages.append("OpenCL C (cl)")
     print("\n".join(supported_languages))
@@ -1553,7 +1815,6 @@ else:
     lock_unit_libdir = os.path.join("@abs_top_srcdir@", "bclib/lock_unit")
     lwpr_libdir = os.path.join("@abs_top_srcdir@", "bclib/lwpr")
     bufalloc_libdir = os.path.join("@abs_top_srcdir@", "bclib/bufalloc")
-    cpp_libdir = os.path.join("@abs_top_srcdir@", "bclib/cpp")
     newlib_libdir = newlibLibdir(options)
     tceLibpath = os.path.join("@abs_top_builddir@", "src/.libs/libopenasip.so")
 
@@ -1563,7 +1824,7 @@ else:
     tceSAOpenCLIncDir = os.path.join("@abs_top_srcdir@", "bclib/include")
     tceOclExtGenDir = os.path.join("@abs_top_builddir@", "src/bintools/Compiler/tceopgen")
 
-    bclib_libdirs = [newlib_libdir, lwpr_libdir, tceSAOpenCLBitcodeLibDir, cpp_libdir]
+    bclib_libdirs = [newlib_libdir, lwpr_libdir, tceSAOpenCLBitcodeLibDir]
 
     # The search paths for source files defined in source libraries (.sa files).
     sourceLibSearchPaths = (os.path.join("@abs_top_srcdir@", "bclib"),)
@@ -1638,6 +1899,73 @@ else:
 
     linkList = processInputFiles(inFiles, tempDir, options)
 
+    # Soft-float conversion helpers, linked on 64-bit REGARDLESS OF LANGUAGE.
+    #
+    # ⛔ THE BUG THIS FIXES: TCEISelLowering registers __extendsfdf2 and nine
+    #    siblings for TARGET64BIT unconditionally -- the selector can emit
+    #    FP_EXTEND/FP_ROUND after LowerMissingInstructions has run, so on
+    #    64-bit they become real libcalls. Their implementations lived in
+    #    libcpp.sa, which was auto-linked only when an input ended .cpp or
+    #    .cc. A pure-C program that converts float<->double therefore failed
+    #    to link with "procedure '__extendsfdf2' not found".
+    # ⇒ A backend's instruction legalisation CANNOT depend on the source
+    #   language. The registration is a property of the TARGET, so the
+    #   implementation has to be too. Hence its own source library, keyed on
+    #   is64BitBuild() and nothing else.
+    # ⚠ All ten symbols move together. Six siblings -- __truncdfsf2,
+    #   __fixsfsi, __fixdfsi, __floatsisf, __floatsidf, __fixunssfsi and the
+    #   unsigned variants -- had identical exposure; only __extendsfdf2
+    #   happened to be the one a benchmark reached, so fixing that symbol
+    #   alone would have left the rest armed.
+    # ⚠ TWO LOCATIONS, BECAUSE THE INSTALLED AND BUILD-TREE LAYOUTS DIFFER AND
+    #   MY FIRST FIX ONLY WORKED IN ONE OF THEM. Installed, the manifests sit
+    #   flat in share/openasip/srclibs/ beside a cpp/ directory of sources. In
+    #   the build tree the search path is <srcdir>/bclib, but every .sa lives one
+    #   level down in its own subdirectory. The SOURCES resolve either way --
+    #   ".files cpp/softfloat_wrappers.c" is relative to the search path and
+    #   the sources are one level down -- so only the MANIFEST lookup misses.
+    # ⛔ The scheduler testbench drives the BUILD-TREE compiler, so checking this
+    #   with the installed one showed the link engaging while the failing test
+    #   was still unresolved. Look in both places rather than assume a layout.
+    # ⚠ Deliberately NOT fixed by adding that subdirectory to
+    #   sourceLibSearchPaths:
+    #   that would also make libcpp.sa findable from the build tree, where it
+    #   has never been found, silently switching C++ auto-linking on for every
+    #   build-tree compile. That may well be the right change, but it is a
+    #   behaviour change and does not belong inside a bug fix for this symbol.
+    # ⛔ TWO CONDITIONS, AND THE SECOND ONE IS NOT OPTIONAL.
+    #    softfloat_wrappers.c is NOT self-contained: it declares
+    #    `extern float64_to_float32`, `float32_to_float64`, … and only BRIDGES
+    #    compiler-rt's naming onto the SoftFloat emulation entry points. Those
+    #    are defined in newlib's float_emulation.c, which linkEmulationFuncs()
+    #    links ONLY when options.soft_float is set.
+    # ⇒ Gating on 64-bit alone injects UNRESOLVED references into every 64-bit
+    #   compile that is not emulating floats. Measured: it took the suite from
+    #   148/149 to 144/149, trading `__extendsfdf2 not found` for
+    #   `call to undefined function 'float64_to_float32'` and widening the
+    #   blast radius from one test to five.
+    # ⚠ Both my check and the Linux seat's first probe used --swfp, so both
+    #   passed for the wrong reason and neither could see this. A probe that
+    #   succeeds because of the very flag that masks the dependency is worse
+    #   than no probe.
+    # ⚠ KNOWN GAP, deliberately not closed here: the libcall REGISTRATION at
+    #   TCEISelLowering.cc:864 is unconditional for TARGET64BIT, so 64-bit code
+    #   that converts float<->double WITHOUT --swfp can still emit a call this
+    #   does not link. Whether that combination is reachable, and whether the
+    #   registration should be conditional instead, is the open question --
+    #   see the plan row. Widening the link set is what just broke four tests.
+    if is64BitBuild(options) and options.soft_float:
+        sfSearchPaths = list(sourceLibSearchPaths) + \
+                        [os.path.join(p, "cpp") for p in sourceLibSearchPaths]
+        for path in sfSearchPaths:
+            sf_lib_path = os.path.join(path, "libsoftfloat.sa")
+            if os.path.exists(sf_lib_path):
+                if options.verbose:
+                    print("note: Auto-linking soft-float conversions (libsoftfloat)")
+                slib = SourceLib("softfloat", sf_lib_path)
+                linkList += slib.build(tempDir, parent_options=options)
+                break
+
     # if only compiling
     if options.compile_only:
         if options.output_name != "":
@@ -1673,7 +2001,7 @@ else:
                 if options.verbose:
                     print("note: Using source library for", i)
                 slib = SourceLib(i, src_lib_path)
-                linkList += slib.build(tempDir)
+                linkList += slib.build(tempDir, parent_options=options)
                 lib_found = True
                 break
             elif os.path.exists(lib_path):

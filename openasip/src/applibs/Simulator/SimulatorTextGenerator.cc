@@ -449,9 +449,19 @@ SimulatorTextGenerator::SimulatorTextGenerator() {
         "Function unit resource conflict detection (disable for speedup).");
 
     addText(
-        Texts::TXT_INTERP_SETTING_RFTRACKING,             
+        Texts::TXT_INTERP_SETTING_RFTRACKING,
         "Concurrent register file access tracking (shown in 'info "
         "proc stats').");
+
+    addText(
+        Texts::TXT_INTERP_SETTING_NGRAM_TRACKING,
+        "Execution-order operation n-gram tracking (bigrams + trigrams; "
+        "shown in 'info stats n_grams' and 'info proc stats').");
+
+    addText(
+        Texts::TXT_INTERP_SETTING_FUNCTION_CYCLES_TRACKING,
+        "Per-function exclusive cycle attribution + call counts (shown in "
+        "'info stats function_cycles' and 'info proc stats').");
 
     addText(
         Texts::TXT_INTERP_SETTING_PROCEDURE_TRANSFER_TRACKING,             

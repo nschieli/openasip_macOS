@@ -47,6 +47,7 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/Support/Debug.h>
 #include <llvm/CodeGen/CostTable.h>
+#include "SystemMacroCleanup.hh"
 #include <llvm/CodeGen/TargetLowering.h>
 #include <llvm/CodeGen/TargetRegisterInfo.h>
 

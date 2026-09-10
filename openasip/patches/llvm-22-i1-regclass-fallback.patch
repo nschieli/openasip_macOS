@@ -1,0 +1,33 @@
+diff --git a/llvm/lib/CodeGen/TargetRegisterInfo.cpp b/llvm/lib/CodeGen/TargetRegisterInfo.cpp
+index cffb3ed1b..bcd5455e0 100644
+--- a/llvm/lib/CodeGen/TargetRegisterInfo.cpp
++++ b/llvm/lib/CodeGen/TargetRegisterInfo.cpp
+@@ -217,18 +217,27 @@ getMinimalPhysRegClass(const TargetRegisterInfo *TRI, MCRegister Reg,
+   // this physreg.
+   const TargetRegisterClass *BestRC = nullptr;
+   for (const TargetRegisterClass *RC : TRI->regclasses()) {
+     if ((IsDefault || TRI->isTypeLegalForClass(*RC, Ty)) && RC->contains(Reg) &&
+         (!BestRC || BestRC->hasSubClass(RC)))
+       BestRC = RC;
+   }
+
+-  if constexpr (std::is_same_v<TypeT, MVT>)
++  if constexpr (std::is_same_v<TypeT, MVT>) {
++    if (!BestRC && !IsDefault) {
++      // Fallback: find any register class containing this register
++      // (needed for TTA targets where i1 values end up in 64-bit IRES0)
++      for (const TargetRegisterClass *RC : TRI->regclasses()) {
++        if (RC->contains(Reg) && (!BestRC || BestRC->hasSubClass(RC)))
++          BestRC = RC;
++      }
++    }
+     assert(BestRC && "Couldn't find the register class");
++  }
+   return BestRC;
+ }
+
+ template <typename TypeT>
+ static const TargetRegisterClass *
+ getCommonMinimalPhysRegClass(const TargetRegisterInfo *TRI, MCRegister Reg1,
+                              MCRegister Reg2, TypeT Ty) {
+   static_assert(std::is_same_v<TypeT, MVT> || std::is_same_v<TypeT, LLT>);

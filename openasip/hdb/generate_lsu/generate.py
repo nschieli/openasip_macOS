@@ -43,7 +43,7 @@ class Operation:
             if load and not sign_ext and access_width < 32:
                 name += "u"
         else:
-            if load and access_width < 32 and not sign_ext:
+            if load and access_width < bus_width and not sign_ext:
                 name += "u"
             name += str(self.access_width)
 

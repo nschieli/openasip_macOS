@@ -57,6 +57,8 @@ class ExecutionTrace;
 class StopPointManager;
 class MemorySystem;
 class UtilizationStats;
+class OperationNGramTracker;
+class FunctionCyclesTracker;
 class RFAccessTracker;
 class BusTracker;
 class ExecutableInstruction;
@@ -161,6 +163,8 @@ public:
     bool busTracing() const;
     bool rfAccessTracing() const;
     bool procedureTransferTracing() const;
+    bool operationNGramTracking() const;
+    bool functionCyclesTracking() const;
     bool profileDataSaving() const;
     bool utilizationDataSaving() const;
     bool staticCompilation() const;
@@ -172,6 +176,10 @@ public:
     void setBusTracing(bool value);
     void setRFAccessTracing(bool value);
     void setProcedureTransferTracing(bool value);
+    void setOperationNGramTracking(bool value);
+    const OperationNGramTracker* operationNGramTracker(int core = -1) const;
+    void setFunctionCyclesTracking(bool value);
+    const FunctionCyclesTracker* functionCyclesTracker(int core = -1) const;
     void setProfileDataSaving(bool value);
     void setUtilizationDataSaving(bool value);
     void forceTraceDBFileName(const std::string& fileName) {
@@ -317,6 +325,10 @@ protected:
     bool rfAccessTracing_;
     /// Is procedure transfer access tracking enabled.
     bool procedureTransferTracing_;
+    /// Is operation n-gram tracking enabled.
+    bool operationNGramTracking_;
+    /// Is function-level cycle attribution tracking enabled.
+    bool functionCyclesTracking_;
     /// Is saving of profile data to TraceDB enabled.
     bool saveProfileData_;
     /// Is saving of utilization data to TraceDB enabled.
@@ -342,6 +354,12 @@ protected:
 
     /// The procedure transfer tracker.
     std::vector<ProcedureTransferTracker*> procedureTransferTrackers_;
+
+    /// Operation n-gram trackers (one per core).
+    std::vector<OperationNGramTracker*> operationNGramTrackers_;
+
+    /// Function-cycles trackers (one per core).
+    std::vector<FunctionCyclesTracker*> functionCyclesTrackers_;
 
     /// The breakpoint manager to be used to bookkeep breakpoints.
     StopPointManager* stopPointManager_;   

@@ -108,11 +108,16 @@ OSEdInfoView::pathView() {
     for (size_t i = 0; i < paths.size(); i++) {
         wxListItem item;
         if (FileSystem::fileExists(paths[i])) {
-            // path exists, let's write it bold
-            wxFont boldFont = wxFont(10,
-                    wxFONTFAMILY_ROMAN,
-                    wxFONTSTYLE_NORMAL,
-                    wxFONTWEIGHT_BOLD);
+            // Path exists, so mark it bold. Derive the font from the
+            // control's own font and change ONLY the weight: hardcoding a
+            // size and family here (it used to be 10pt wxFONTFAMILY_ROMAN)
+            // makes the bold rows a different size AND a different typeface
+            // from the non-bold ones, because the unstyled rows keep the
+            // platform's default list font. On macOS that default is the
+            // ~13pt system UI face, so every existing path rendered 10pt
+            // serif next to 13pt sans -- visibly ragged line to line.
+            wxFont boldFont = GetFont();
+            boldFont.SetWeight(wxFONTWEIGHT_BOLD);
 
             item.SetFont(boldFont);
         }
@@ -183,11 +188,11 @@ OSEdInfoView::operationView(const std::string& path, const std::string& mod) {
         string name = index.operationName(j, module);
         wxListItem item;
         if (OperationContainer::isEffective(module, name)) {
-            // operation is effective, let's put it with bold font
-            wxFont boldFont = wxFont(10,
-                    wxFONTFAMILY_ROMAN,
-                    wxFONTSTYLE_NORMAL,
-                    wxFONTWEIGHT_BOLD);
+            // Operation is effective, so mark it bold -- same rule as
+            // pathView(): take the control's font and change only the
+            // weight, never a hardcoded size/family.
+            wxFont boldFont = GetFont();
+            boldFont.SetWeight(wxFONTWEIGHT_BOLD);
 
             item.SetFont(boldFont);
         }

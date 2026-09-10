@@ -78,6 +78,7 @@ public:
     std::vector<std::pair<std::string, std::string>> icdArgList() const;
     bool preferHDLGeneration() const;
     bool resetAllRegisters() const;
+    bool selectRFFromHDB() const;
     std::vector<std::string> fuBackRegistered() const;
     std::vector<std::string> fuFrontRegistered() const;
     std::vector<std::string> fuMiddleRegistered() const;

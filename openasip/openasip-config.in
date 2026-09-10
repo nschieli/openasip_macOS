@@ -1,6 +1,38 @@
 #!/bin/sh
 
+# Derive the prefix from THIS SCRIPT'S OWN LOCATION, falling back to the
+# configured one.
+#
+# This script is the prefix oracle for the whole toolset: everything that needs
+# to find share/openasip asks `tce-config --prefix` (a symlink to this file).
+# With the configured prefix baked in, a tree that is moved, repackaged or
+# unpacked anywhere other than where it was built reports a directory that does
+# not exist on that machine -- and the failure surfaces far away, as
+# "Could not find minimal_with_stdout.adf" or "No schema file set", with the
+# real cause nowhere in the message.
+#
+# The override applies only when the layout actually looks like an install
+# (<prefix>/bin/openasip-config with a share/openasip beside it), so an
+# in-tree or unusual invocation still gets the configured value.
+_oa_self=$0
+while [ -L "$_oa_self" ]; do
+  _oa_link=`readlink "$_oa_self"`
+  case $_oa_link in
+    /*) _oa_self=$_oa_link ;;
+    *)  _oa_self=`dirname "$_oa_self"`/$_oa_link ;;
+  esac
+done
+_oa_bindir=`cd "\`dirname "$_oa_self"\`" 2>/dev/null && pwd`
+
 prefix=@prefix@
+case $_oa_bindir in
+  */bin)
+    _oa_root=`dirname "$_oa_bindir"`
+    if test -d "$_oa_root/share/openasip"; then
+      prefix=$_oa_root
+    fi
+    ;;
+esac
 exec_prefix=@exec_prefix@
 exec_prefix_set=no
 

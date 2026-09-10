@@ -325,6 +325,24 @@ TCEInstrInfo::copyPhysReg(
                TCE::GuardRegsRegClass.contains(destReg)) {
         BuildMI(mbb, mbbi, dl, get(TCE::MOVI1Grr), destReg)
             .addReg(srcReg, getKillRegState(killSrc));
+#ifdef TARGET64BIT
+    } else if (TCE::R1RegsRegClass.contains(destReg) &&
+               TCE::R64IRegsRegClass.contains(srcReg)) {
+        BuildMI(mbb, mbbi, dl, get(TCE::MOVI64I1ss), destReg)
+            .addReg(srcReg, getKillRegState(killSrc));
+    } else if (TCE::R64IRegsRegClass.contains(destReg) &&
+               TCE::R1RegsRegClass.contains(srcReg)) {
+        BuildMI(mbb, mbbi, dl, get(TCE::MOVI1I64ss), destReg)
+            .addReg(srcReg, getKillRegState(killSrc));
+    } else if (TCE::R64IRegsRegClass.contains(destReg) &&
+               TCE::GuardRegsRegClass.contains(srcReg)) {
+        BuildMI(mbb, mbbi, dl, get(TCE::MOVGI64ss), destReg)
+            .addReg(srcReg, getKillRegState(killSrc));
+    } else if (TCE::GuardRegsRegClass.contains(destReg) &&
+               TCE::R64IRegsRegClass.contains(srcReg)) {
+        BuildMI(mbb, mbbi, dl, get(TCE::MOVI64Gss), destReg)
+            .addReg(srcReg, getKillRegState(killSrc));
+#endif
     } else {
         assert(
             false && "TCERegisterInfo::copyPhysReg(): Can't copy register");

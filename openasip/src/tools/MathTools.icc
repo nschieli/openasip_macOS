@@ -158,6 +158,38 @@ MathTools::requiredBitsSigned(ULongWord number) {
     return requiredBitsSigned(static_cast<SLongWord>(number));
 }
 
+#if SIZEOF_LONG == 8
+/**
+ * Returns the number of bits required to represent the given number as
+ * a signed integer.
+ *
+ * Exists so that int64_t/uint64_t have an EXACT overload match on platforms
+ * where they are `long long` rather than `long` (macOS). See the note in
+ * MathTools.hh.
+ *
+ * @param number The number.
+ * @return The number of bits required to represent the given number.
+ */
+
+inline int
+MathTools::requiredBitsSigned(long long number) {
+    return requiredBitsSigned(static_cast<SLongWord>(number));
+}
+
+/**
+ * Returns the number of bits required to represent the given number as
+ * a signed integer.
+ *
+ * @param number The number.
+ * @return The number of bits required to represent the given number.
+ */
+
+inline int
+MathTools::requiredBitsSigned(unsigned long long number) {
+    return requiredBitsSigned(static_cast<SLongWord>(number));
+}
+#endif
+
 /**
  * Returns the number of bits required to represent the give number as
  * an unsigned number. 0 is implicit 0.
