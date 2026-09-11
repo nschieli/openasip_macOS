@@ -105,9 +105,17 @@ public:
         ULongWord address,
         ULongWord& data);
 
-    virtual void advanceClock() {}
-    virtual void reset() {}
-    virtual void fillWithZeros();
+    // These three DO override Memory's virtuals (Memory.hh:82, 113, 114) but
+    // said so only by repeating `virtual`. clang's
+    // -Winconsistent-missing-override then fires on every translation unit
+    // that includes this header -- harmless in a normal build, but the
+    // compiled simulator generates and compiles code at RUN time and pipes the
+    // compiler's stderr through ttasim, so it became 31 KB of warnings on
+    // every `ttasim -q`. gcc does not warn here by default, which is why this
+    // was invisible on Linux.
+    void advanceClock() override {}
+    void reset() override {}
+    void fillWithZeros() override;
 
     void writeBE(ULongWord address, int count, ULongWord data) override;
 

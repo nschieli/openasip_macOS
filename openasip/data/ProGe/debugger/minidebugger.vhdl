@@ -237,28 +237,50 @@ begin
                                        & tta_lockrq_r(core_id_v)
                                        & tta_locked_rr(core_id_v);
               end if;
+            -- Per-core slice mux: a `for i in 0 to core_count_g-1`
+            -- loop unrolls at elaboration into N constant-index
+            -- slices wrapped in N constant-equality `if`s. This is
+            -- equivalent to the pre-refactor `tta_pc_rr(W*(core_id_v
+            -- +1)-1 downto W*core_id_v)` shape but synth-friendly:
+            -- Yosys's GHDL frontend rejects dynamic-bound slices
+            -- ("cannot extract same variable part for dynamic slice")
+            -- because it can't constant-propagate the
+            -- `core_id_v < core_count_g` guard through the slice
+            -- arithmetic. The for-loop hoists the index variability
+            -- into N parallel constant arms — same MUX synthesis,
+            -- same RTL semantics for every N >= 1.
             when TTA_PC =>
-              if core_id_v < core_count_g then
-                rdata_r                  <= (others => '0');
-                rdata_r(imem_addr_width_g-1 downto 0) <=
-                  tta_pc_rr(imem_addr_width_g*(core_id_v+1)-1 downto imem_addr_width_g*core_id_v);
-              end if;
+              rdata_r <= (others => '0');
+              for i in 0 to core_count_g-1 loop
+                if core_id_v = i then
+                  rdata_r(imem_addr_width_g-1 downto 0) <=
+                    tta_pc_rr(imem_addr_width_g*(i+1)-1 downto imem_addr_width_g*i);
+                end if;
+              end loop;
             when TTA_CYCLECNT =>
-              if core_id_v< core_count_g then
-                rdata_r <= tta_cyclecnt_r(64*core_id_v+32-1 downto core_id_v*64);
-              end if;
+              for i in 0 to core_count_g-1 loop
+                if core_id_v = i then
+                  rdata_r <= tta_cyclecnt_r(64*i+32-1 downto i*64);
+                end if;
+              end loop;
             when TTA_CYCLECNT_HIGH =>
-              if core_id_v< core_count_g then
-                rdata_r <= tta_cyclecnt_r(64*core_id_v+64-1 downto core_id_v*64+32);
-              end if;
+              for i in 0 to core_count_g-1 loop
+                if core_id_v = i then
+                  rdata_r <= tta_cyclecnt_r(64*i+64-1 downto i*64+32);
+                end if;
+              end loop;
             when TTA_LOCKCNT =>
-              if core_id_v< core_count_g then
-                rdata_r <= tta_lockcnt_r(64*core_id_v+32-1 downto core_id_v*64);
-              end if;
+              for i in 0 to core_count_g-1 loop
+                if core_id_v = i then
+                  rdata_r <= tta_lockcnt_r(64*i+32-1 downto i*64);
+                end if;
+              end loop;
             when TTA_LOCKCNT_HIGH =>
-              if core_id_v< core_count_g then
-                rdata_r <= tta_lockcnt_r(64*core_id_v+64-1 downto core_id_v*64+32);
-              end if;
+              for i in 0 to core_count_g-1 loop
+                if core_id_v = i then
+                  rdata_r <= tta_lockcnt_r(64*i+64-1 downto i*64+32);
+                end if;
+              end loop;
 
             when TTA_DEVICECLASS =>
               rdata_r <= std_logic_vector(to_unsigned(device_class_c, 32));

@@ -51,6 +51,7 @@ public:
     virtual void printHelp() const;
 
     bool debugMode();
+    bool printCycles();
     std::string scriptString();
 
     std::string machineFile();

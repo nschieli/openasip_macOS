@@ -1106,16 +1106,20 @@ CodeCompressorPlugin::encodeLongImmediate(
             }
 
             // push back the immediate value
-            UIntWord immediateValue = imm.value().value().uIntWordValue();
-            addBits(
-                immediateValue, leftmostBitToEncode, rightmostBitToEncode, 
-                bitVector);
+            // Use SimValue::bitElement() for ADF-agnostic bit extraction
+            // (supports any IU width, not just 32 or 64 bit)
+            const SimValue& immediateValue = imm.value().value();
+            for (int i = leftmostBitToEncode; i >= rightmostBitToEncode;
+                 i--) {
+                bitVector.push_back(immediateValue.bitElement(i) != 0);
+            }
 
             // if the long immediate is address of an instruction, mark it
             // to relocMap_ and indexTable_
             if (AssocTools::containsKey(immediatesToRelocate_, &imm)) {
+                UIntWord immAddr = immediateValue.uIntWordValue();
                 Instruction& referenced = currentPOM_->instructionAt(
-                    immediateValue);
+                    immAddr);
                 unsigned int startIndex = bitVector.size() - slotWidth;
                 unsigned int endIndex = bitVector.size() - 1;
                 relocMap_.insert(
@@ -1690,7 +1694,7 @@ CodeCompressorPlugin::addBits(
     int leftmostBit,
     int rightmostBit,
     BitVector& bitVector) {
-    
+
     for (int i = leftmostBit; i >= rightmostBit; i--) {
         bitVector.push_back(MathTools::bit(number, i));
     }

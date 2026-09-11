@@ -122,6 +122,7 @@ private:
         int sourceCycle;
         int pipelineStage;
         std::string operation;
+        bool isSignedOperand;  ///< true if OSAL operand type is signed (use Sext, not Ext)
     };
 
     struct OperationSchedule {

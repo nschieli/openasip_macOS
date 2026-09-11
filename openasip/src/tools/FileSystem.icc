@@ -30,10 +30,18 @@
  * @author Esa Määttä 2007 (esa.maatta-no.spam-tut.fi)
  */
 
-#include <boost/filesystem/operations.hpp>
-#include <boost/filesystem/convenience.hpp>
-#include <boost/filesystem/exception.hpp>
 #include <boost/version.hpp>
+#include <boost/filesystem/operations.hpp>
+// boost/filesystem/convenience.hpp was a deprecated compatibility shim whose
+// contents were folded into operations.hpp / path.hpp years ago, and Boost
+// 1.87 REMOVED it outright. The only thing this translation unit needs from
+// it is boost::filesystem::path::extension(), which lives in path.hpp and
+// arrives via operations.hpp above. Keep including it on older Boost so
+// nothing regresses on distributions still shipping < 1.87.
+#if BOOST_VERSION < 108700
+#include <boost/filesystem/convenience.hpp>
+#endif
+#include <boost/filesystem/exception.hpp>
 
 #include "CompilerWarnings.hh"
 IGNORE_CLANG_WARNING("-Wkeyword-macro")

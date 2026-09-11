@@ -67,6 +67,7 @@ const string ICD_ARG_LIST = "icd-arg-list";
 const string PREFER_GEN = "prefer-generation";
 const string RF_ICGATE_LIST = "rf-ic-gate";
 const string DONT_RESET_ALL = "dont-reset-all";
+const string SELECT_RF_FROM_HDB = "select-rf-from-hdb";
 const string FU_BACKREGISTER_LIST = "fu-back-register";
 const string FU_FRONTREGISTER_LIST = "fu-front-register";
 const string FU_MIDDLEREGISTER_LIST = "fu-middle-register";
@@ -194,9 +195,11 @@ ProGeCmdLineOptions::ProGeCmdLineOptions() :
         SYNC_RESET, "Generate Synchronous reset (default async).");
     addOption(syncReset);
 
+    // No short alias: "-h" is reserved for --help by CmdLineOptions, so a "h"
+    // alias here was dead (help always won) and the auto-generated usage text
+    // misleadingly advertised "-h, --hdb-list". Use the long form --hdb-list.
     StringCmdLineOptionParser* hdbList = new StringCmdLineOptionParser(
-        HDB_LIST, "Comma separated list of HDBs for automated generation.",
-        "h");
+        HDB_LIST, "Comma separated list of HDBs for automated generation.");
     addOption(hdbList);
 
     StringCmdLineOptionParser* icdArgList = new StringCmdLineOptionParser(
@@ -214,6 +217,15 @@ ProGeCmdLineOptions::ProGeCmdLineOptions() :
         DONT_RESET_ALL,
         "Doesn't reset unnecessary registers (default false).");
     addOption(resetAll);
+
+    BoolCmdLineOptionParser* selectRFFromHDB = new BoolCmdLineOptionParser(
+        SELECT_RF_FROM_HDB,
+        "Allow register file implementations to be taken from the HDBs in "
+        "--hdb-list instead of always generating them (default false). "
+        "An HDB entry is a hand-maintained claim about its RTL and is not "
+        "checked against it, so enable this only when a specific entry is "
+        "wanted, e.g. a BRAM-inferring RF on FPGA.");
+    addOption(selectRFFromHDB);
 
     StringCmdLineOptionParser* rfIcGateList = new StringCmdLineOptionParser(
         RF_ICGATE_LIST, "Comma separated list of RFs to IC-Gate.");
@@ -540,6 +552,17 @@ ProGeCmdLineOptions::preferHDLGeneration() const {
 bool
 ProGeCmdLineOptions::resetAllRegisters() const {
     return !findOption(DONT_RESET_ALL)->isFlagOn();
+}
+
+/**
+ * Returns true if RF implementations may be selected from the HDBs.
+ *
+ * Defaults to false, which is what OpenASIP did before RF selection
+ * existed: every RF is generated from the ADF by RFGen.
+ */
+bool
+ProGeCmdLineOptions::selectRFFromHDB() const {
+    return findOption(SELECT_RF_FROM_HDB)->isFlagOn();
 }
 
 /**

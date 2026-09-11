@@ -8,6 +8,8 @@ nobase_data_DATA =	$(srcdir)/ProDe/confschema.xsd \
 					$(srcdir)/mach/minimal.adf \
 					$(srcdir)/mach/minimal_be.adf \
 					$(srcdir)/mach/minimal_with_stdout.adf \
+					$(srcdir)/mach/minimal_64b_with_stdout.adf \
+					$(srcdir)/mach/minimal_64b_with_stdout_16regs.adf \
 					$(srcdir)/mach/rv32im.adf \
 					$(srcdir)/osal/Operation_Schema.xsd \
 					$(srcdir)/idf/IDF_Schema.xsd \
@@ -39,7 +41,8 @@ nobase_data_DATA =	$(srcdir)/ProDe/confschema.xsd \
 					$(srcdir)/ProGe/debugger/*.vhdl.tmpl \
 					$(srcdir)/ProGe/*.snippet \
 					$(srcdir)/ProGe/debugger/tb/*.vhdl \
-					$(srcdir)/riscv/* \
+					$(srcdir)/riscv/RISCVPluginMakefile \
+					$(srcdir)/riscv/runtime/*.c \
 					$(srcdir)/RFGen/vhdl/*.vhdl \
 					$(srcdir)/RFGen/verilog/*.v
 

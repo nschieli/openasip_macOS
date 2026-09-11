@@ -49,15 +49,42 @@ include_HEADERS = Application.hh ObjectState.hh Exception.hh Exception.icc BaseT
 	CmdLineOptionParser.hh CmdLineOptionParser.icc MapTools.hh MapTools.icc \
 	CIStringSet.hh ContainerTools.hh ContainerTools.icc Listener.hh \
 	Informer.hh Informer.icc HalfFloatWord.hh tce_config_public.h \
-	CompilerWarnings.hh Environment.hh RandomNumberGenerator.hh \
+	CompilerWarnings.hh SystemMacroCleanup.hh Environment.hh \
+	RandomNumberGenerator.hh \
 	LicenseGenerator.hh RISCVTools.hh \
 	RISCVTools.icc
 
-REVNO=$(shell which git > /dev/null && echo -n "-r" && git rev-list HEAD | wc -l)
+# NOTE: do not use `echo -n` here -- it is not POSIX, and the /bin/sh that
+# $(shell ...) runs under on macOS prints the flags literally, which produced
+# "-n -r" in the version string. macOS's `wc -l` also pads its output with
+# leading spaces, so strip them. See the matching fix at configure.ac:10.
+REVNO=$(shell if git rev-list HEAD >/dev/null 2>&1; then printf -- "-r%s" "$$(git rev-list HEAD | wc -l | tr -d ' ')"; fi)
 
 TCE_VERSION_STRING=@PACKAGE_VERSION@$(REVNO)
 
-tce_version_string.h: ../../../.git
+# ⛔ $(wildcard), NOT A BARE PATH. `tce_version_string.h: ../../../.git` makes the
+#    build IMPOSSIBLE in any tree without a .git — a source tarball, an exported
+#    tree, or our public cut — with "No rule to make target '../../../.git'".
+#    Nothing else in the build needs git, so this single prerequisite is the only
+#    thing tying a source build to a working copy.
+# ⚠ THE PATH IS DELIBERATELY LEFT AS ../../../.git RATHER THAN $(top_srcdir)/.git.
+#   $(top_srcdir) here is openasip/, so $(top_srcdir)/.git is openasip/.git — which
+#   exists in NEITHER upstream's layout nor ours. It would silently drop the
+#   revision from the version string rather than fail, so the tidier form is the
+#   dangerous one. ../../../.git resolves to the REPO ROOT's .git, which is where
+#   it actually lives.
+#   ⛔ AND THE REASON IS NOT "the two layouts differ but happen to coincide" — an
+#      earlier version of this comment claimed that and it was WRONG. Measured at
+#      f2282048f: upstream's repo root is .github/.gitignore/CONTRIBUTING.md/
+#      LICENSE.txt/README.md/openasip/testsuite, and openasip/src/tools/Makefile.am
+#      exists there at that same path. UPSTREAM NESTS openasip/ EXACTLY AS WE DO,
+#      so the path works identically because THE LAYOUTS ARE THE SAME. Recorded
+#      because the wrong reason is the part that gets reused: anyone carrying
+#      "upstream's openasip is the repo root" forward will mis-derive the next path.
+#      Caught by the Linux seat while confirming the fix, not while disputing it.
+# Wrapping preserves today's behaviour exactly where .git exists and only removes
+# the prerequisite where it does not.
+tce_version_string.h: $(wildcard ../../../.git)
 	@echo "Setting TCE_VERSION_STRING to $(TCE_VERSION_STRING)"
 	@echo '#define TCE_VERSION_STRING "$(TCE_VERSION_STRING)"' > $@
 

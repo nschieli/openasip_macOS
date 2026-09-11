@@ -40,6 +40,7 @@
 
 IGNORE_COMPILER_WARNING("-Wunused-parameter")
 
+#include "SystemMacroCleanup.hh"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/Analysis/TargetTransformInfo.h"

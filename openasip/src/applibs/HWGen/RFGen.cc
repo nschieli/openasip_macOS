@@ -306,18 +306,32 @@ RFGen::createRFWriteProcess() {
         + std::to_string(adfRF_->size()) + "-1 downto 0);",
         "integer i;\n");
 
-    std::string vhdlCode
-        = "---------------------------------------------------------------\n"
-        "Input : PROCESS (clk, rstx)\n"
-        "---------------------------------------------------------------\n"
-        "variable opc : integer;\n"
-        "\n"
+    // Use a generate loop with per-register processes instead of a single process
+    // with a variable opcode (regfile_r(opc) <= data_wr_in).
+    //
+    // The single-process style causes GHDL to expand the variable-opcode write
+    // into a full 2N-bit enable mux before the flip-flop register. Yosys then
+    // emits this as a combinatorial feedback loop:
+    //   assign new_val = en ? data : regfile_r;   // regfile_r = FF output wire
+    //   always @(posedge clk) ff <= new_val;
+    // Verilator flags this as UNOPTFLAT and, when breaking the loop, applies the
+    // RF write before evaluating other clocked processes (e.g. lsu_registers),
+    // causing write-forwarding: same-cycle reads see the written value instead
+    // of the pre-write value.
+    //
+    // The generate loop makes each process write to a FIXED register slot (REG_IDX
+    // is an elaboration-time constant). GHDL generates $dffe (enable flip-flop)
+    // cells — no combinatorial feedback, no UNOPTFLAT loop. Verilator evaluates
+    // all clocked processes in one sweep using pre-write values: correct
+    // read-before-write semantics without any pipeline latency change.
+    std::string rfSize = std::to_string(adfRF_->size());
+
+    std::string vhdlCode =
+        "gen_rf_write: for REG_IDX in 0 to " + rfSize + "-1 generate\n"
+        "proc_rf_write: PROCESS (clk, rstx)\n"
         "BEGIN\n"
-        "  -- Asynchronous Reset\n"
         "  IF (rstx = '0') THEN\n"
-        "    for idx in (" + mainRegName_ + "'length-1) downto 0 loop\n"
-        "      " + mainRegName_ + "(idx) <= (others => '0');\n"
-        "    end loop;\n"
+        "    " + mainRegName_ + "(REG_IDX) <= (others => '0');\n"
         "  ELSIF (clk'EVENT AND clk = '1') THEN\n"
         "    IF glock_in = '0' THEN\n";
 
@@ -327,23 +341,28 @@ RFGen::createRFWriteProcess() {
             std::string loadPortName = "load_" + adfPort->name() + "_in";
             std::string opcodePortName = "opcode_" + adfPort->name() + "_in";
             std::string dataPortName = "data_" + adfPort->name() + "_in";
-            vhdlCode
-                += "      IF " + loadPortName + " = '1' THEN\n"
-                +  "        opc := to_integer(unsigned(" + opcodePortName + "));\n"
-                +  "        " + mainRegName_ + "(opc) <= " + dataPortName +";\n"
-                +  "      END IF;\n";
+            vhdlCode +=
+                "      IF " + loadPortName + " = '1' AND "
+                "to_integer(unsigned(" + opcodePortName + ")) = REG_IDX THEN\n"
+                "        " + mainRegName_ + "(REG_IDX) <= " + dataPortName + ";\n"
+                "      END IF;\n";
         }
     }
 
     // If RF has zero register (first reg index always 0).
     if (adfRF_->zeroRegister()) {
-        vhdlCode += "      -- Zero register\n";
-        vhdlCode += "      " + mainRegName_ + "(0) <= (others => '0');\n";
+        vhdlCode +=
+            "      -- Zero register: always force index 0 to zero\n"
+            "      IF REG_IDX = 0 THEN\n"
+            "        " + mainRegName_ + "(REG_IDX) <= (others => '0');\n"
+            "      END IF;\n";
     }
 
-    vhdlCode += "    END IF;\n";
-    vhdlCode += "  END IF;\n";
-    vhdlCode += "END PROCESS Input;\n";
+    vhdlCode +=
+        "    END IF;\n"
+        "  END IF;\n"
+        "END PROCESS proc_rf_write;\n"
+        "end generate gen_rf_write;\n";
 
     std::string verilogCode = "";
     verilogCode += std::string("  always @(posedge clk or negedge rstx) begin\n")

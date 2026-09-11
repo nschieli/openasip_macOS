@@ -207,6 +207,10 @@ main(int argc, char* argv[]) {
         // CompilerErrors are related to the user program input and
         // should be communicated to the programmer in a clean fashion.
         Application::errorStream() << e.errorMessage() << std::endl;
+        // A clean message is still a failure: no program was written, so
+        // falling through to EXIT_SUCCESS made oacc report success with no
+        // output file (e.g. when the backend plugin fails to build).
+        return EXIT_FAILURE;
     } catch (const Exception& e) {
         // Assume other Exceptions are due to like lack of more
         // user friendly CompilerError or actual internal compiler errors.

@@ -1,0 +1,330 @@
+name: Build and Test (macOS arm64)
+
+# A SEPARATE FILE, DELIBERATELY. `ci.yml` is upstream's and is byte-identical to
+# cpc/openasip; keeping it untouched means future upstream merges do not conflict
+# in the one file most likely to be edited on both sides. This workflow is ours.
+#
+# It certifies the thing this fork exists for: that OpenASIP builds and self-tests
+# on Apple Silicon from a clean checkout, with no developer machine's state.
+
+on:
+  push:
+    branches:
+      - main
+    # A tag builds and PUBLISHES a release. Downstream (Homebrew, the product
+    # package) needs a URL that does not expire; a workflow artifact does, in
+    # 30 days.
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    # macos-14 is the first Apple Silicon image and is what the port targets.
+    # Pinned rather than macos-latest so a runner-image bump cannot silently
+    # change what "certified on macOS" means.
+    runs-on: macos-14
+
+    # Only the release step needs this; scoped at the job because that is the
+    # smallest unit GitHub allows.
+    permissions:
+      contents: write
+
+    # ⚠ COST GATE. macOS runner minutes are billed at 10x on PRIVATE repos and are
+    #   free on public ones. While this repo is private the job runs ONLY when
+    #   someone asks for it; the moment it goes public it runs on every push with
+    #   no further change. Do not remove this without meaning to.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.repository.private == false
+
+    env:
+      LLVM_VERSION: 22
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          brew install boost xerces-c autoconf automake libtool cmake ninja wxwidgets
+          echo "--- versions, so a green names its toolchain ---"
+          autoconf --version | head -1
+          automake --version | head -1
+          brew list --versions boost xerces-c wxwidgets
+
+      - name: Create workspace directory
+        run: mkdir -p ${{ github.workspace }}/local
+
+      # Keyed on the INSTALLER, exactly as upstream's Linux job does: our i1 patch
+      # lives beside it, so a change to either correctly invalidates the cache
+      # rather than reusing an LLVM built without it.
+      - name: Restore LLVM cache
+        id: llvm-cache-restore
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/local
+          key: macos14-llvm-${{ hashFiles('openasip/tools/scripts/install_llvm_22.sh', 'openasip/patches/llvm-22-i1-regclass-fallback.patch') }}
+
+      - name: Install LLVM
+        run: |
+          if [[ "${{ steps.llvm-cache-restore.outputs.cache-hit }}" != "true" ]]; then
+            cd openasip
+            ./tools/scripts/install_llvm_${LLVM_VERSION}.sh ${{ github.workspace }}/local
+          else
+            echo "### LLVM restored from cache."
+          fi
+
+      - name: Save LLVM cache
+        uses: actions/cache/save@v5
+        if: steps.llvm-cache-restore.outputs.cache-hit != 'true'
+        with:
+          path: ${{ github.workspace }}/local
+          key: ${{ steps.llvm-cache-restore.outputs.cache-primary-key }}
+
+      # ⚠ Homebrew installs into /opt/homebrew, which is NOT on clang's default
+      #   search path on Apple Silicon — the single most common reason an
+      #   otherwise correct macOS build fails. Passed explicitly.
+      - name: Compile and install
+        run: |
+          export PATH=${{ github.workspace }}/local/bin:$PATH
+          cd openasip
+          ./autogen.sh
+          ./configure --prefix=${{ github.workspace }}/local \
+                      --with-boost=/opt/homebrew \
+                      --with-xerces=/opt/homebrew
+          make -j$(sysctl -n hw.ncpu)
+          make install
+
+      - name: oa-selftest
+        run: |
+          export PATH=${{ github.workspace }}/local/bin:$PATH
+          export DYLD_LIBRARY_PATH=${{ github.workspace }}/local/lib:$DYLD_LIBRARY_PATH
+          oa-selftest -v -f
+
+      # ── Big-endian ──────────────────────────────────────────────────────────
+      # ⛔ oa-selftest uses ONLY little-endian machines, and the backend plugin
+      #    is compiled per machine on demand -- so a big-endian machine that
+      #    cannot build its plugin passes the selftest untouched. That is exactly
+      #    how `std::max(1UL, uint64_t)` (unsigned long long on macOS) broke
+      #    every big-endian compile here while the selftest stayed 10/10.
+      # ⛔ TEST THE RESULT, NOT THE EXIT CODE. oacc used to exit 0 with no .tpef
+      #    when the plugin failed to build; the simulated value is the only
+      #    thing that proves the compile happened and was right.
+      # ⭐ AND PROVE A FAILURE IS REPORTED: with the plugin build forced to fail
+      #    (a g++ that exits 1), oacc must exit non-zero and write nothing.
+      - name: Big-endian — compile and simulate, and a failed compile must fail
+        run: |
+          set -euo pipefail
+          export PATH=${{ github.workspace }}/local/bin:$PATH
+          export DYLD_LIBRARY_PATH=${{ github.workspace }}/local/lib:${DYLD_LIBRARY_PATH:-}
+          adf=${{ github.workspace }}/openasip/data/mach/minimal_be.adf
+          w=$(mktemp -d); cd "$w"
+          printf '%s\n' 'volatile int result;' \
+            'int main(void){ int s=0; for(int i=1;i<=100;i++) s+=i*i; result=s; return 0; }' > t.c
+          fail=0
+
+          oacc --plugin-cache-dir="$w/cache" -O2 -k result -a "$adf" -o t.tpef t.c || true
+          if [ ! -f t.tpef ]; then
+            echo "::error::no program was produced for big-endian $(basename "$adf")"; fail=1
+          else
+            got=$(ttasim -a "$adf" -p t.tpef -e 'run; puts [x /u w [symbol_address result]]; quit' 2>&1 | tail -1)
+            [ "$got" = "0x000529ae" ] \
+              && echo "  big-endian: simulated result $got" \
+              || { echo "::error::big-endian result '$got', expected 0x000529ae"; fail=1; }
+          fi
+
+          mkdir fakegxx && printf '#!/bin/sh\nexit 1\n' > fakegxx/g++ && chmod +x fakegxx/g++
+          rm -f f.tpef
+          if PATH="$w/fakegxx:$PATH" oacc --plugin-cache-dir="$w/cache-fail" -O2 -a "$adf" -o f.tpef t.c; then
+            echo "::error::oacc exited 0 although its backend plugin failed to build"; fail=1
+          else
+            echo "  a failed plugin build is reported as a failure"
+          fi
+          [ -f f.tpef ] && { echo "::error::a failed compile still wrote a program"; fail=1; }
+          exit $fail
+
+      # ── Relocatability ──────────────────────────────────────────────────────
+      # ⭐ THE INSTALLED TREE MUST RUN FROM A PATH IT WAS NOT BUILT AT. Homebrew
+      #    bottles, a downloadable bundle and this job's own tarball all move it.
+      # ⛔ MEASURED BEFORE THE FIX: libtool hardcodes the link-time libdir as the
+      #    dylib's install name, so 26 of 138 binaries carried an absolute path
+      #    and died with `dyld: Library not loaded` once moved. configure.ac now
+      #    rewrites libtool to emit @rpath and adds -Wl,-rpath,@loader_path/../lib.
+      # ⚠ THE TEST MOVES THE TREE AND RUNS A COMPILED BINARY, deliberately.
+      #    oacc and oa-selftest are PYTHON and run fine on a broken relocated
+      #    tree, so a smoke test calling the two most obvious commands reports
+      #    success on a toolchain that cannot actually load its own library.
+      - name: Relocatable — move the tree and run from it
+        run: |
+          set -euo pipefail
+          fail=0
+          SRC=${{ github.workspace }}/local
+          DST=${{ github.workspace }}/relocated
+          mv "$SRC" "$DST"
+
+          # 1. the library must not name an absolute install path
+          name=$(otool -D "$DST/lib/libopenasip.28.dylib" | tail -1)
+          echo "install name: $name"
+          case "$name" in
+            @rpath/*) ;;
+            *) echo "::error::libopenasip install name is not @rpath: $name"; fail=1 ;;
+          esac
+
+          # 2. ⭐ COMPILED binaries must RUN from the new location, in a clean
+          #    environment -- env -i so no DYLD_* or PATH can mask a failure.
+          # ⛔ TEST THE OUTPUT, NOT THE EXIT CODE. `generateprocessor --version`
+          #    exits 1 while printing the right banner, so an exit-code check
+          #    calls a working binary broken. A dyld failure is unmistakable in
+          #    the output instead: exit 134 with "Library not loaded".
+          # ⇒ The binary must print its OWN NAME, which it can only do after the
+          #    library loaded and its own code ran.
+          for b in ttasim generateprocessor; do
+            out=$(cd / && env -i "$DST/bin/$b" --version 2>&1 || true)
+            case "$out" in
+              *"Library not loaded"*|*"dyld"*)
+                echo "::error::$b could not load its library from the relocated tree: $out"; fail=1 ;;
+              *"$b"*)
+                echo "  $b: $(echo "$out" | head -1)" ;;
+              *)
+                echo "::error::$b did not identify itself; got: $out"; fail=1 ;;
+            esac
+          done
+
+          # 3. the prefix oracle must report where it now IS, not where it was
+          #    built -- this is what tells every tool where its data files live.
+          got=$(cd / && env -i "$DST/bin/openasip-config" --prefix)
+          [ "$got" = "$DST" ] || { echo "::error::openasip-config says '$got', expected '$DST'"; fail=1; }
+
+          # 4. and a real data-path load, not just a version string
+          # ⛔⛔ TEST THE OUTPUT. ttasim EXITS 0 WHILE FAILING TO LOAD A MACHINE.
+          #    The first version of this check used the exit code and reported
+          #    "the installed tree is relocatable" on a run whose own log said
+          #    `Unable to load machine.Illegal machine file.No schema file set.`
+          #    -- a green printed directly beneath the failure it was meant to
+          #    catch. Same defect as the --version check two steps up, left in
+          #    place here after being fixed there.
+          # ⚠ AND THIS CANNOT BE CAUGHT ON A DEVELOPER BOX. `installationDir()`
+          #    falls back to the compiled-in prefix, and on a machine that has
+          #    ever installed there, THAT TREE'S data files satisfy the load --
+          #    so the test passes locally for a reason that has nothing to do
+          #    with the relocated tree. Only a machine with nothing at the build
+          #    path tells the truth, which is why CI found this and the local
+          #    run could not.
+          adf=$(find "$DST/share" -name 'minimal*.adf' | head -1)
+          out=$(cd / && env -i "$DST/bin/ttasim" -e "mach $adf; quit" 2>&1 || true)
+          case "$out" in
+            *"Unable to load machine"*|*"No schema file set"*|*"Illegal machine file"*)
+              echo "::error::ttasim cannot load an ADF from the relocated tree -- it resolves its DATA files through the compiled-in prefix, not its own location."
+              echo "::error::$out"
+              fail=1 ;;
+            *) echo "  ttasim loaded $(basename "$adf") from the relocated tree" ;;
+          esac
+
+          mv "$DST" "$SRC"
+          [ "$fail" -eq 0 ] && echo "the installed tree is relocatable: linkage AND data files"
+          exit $fail
+
+      # ⛔ AND RELOCATABILITY IS CHECKED BEFORE PACKAGING, FOR THE SAME
+      #    REASON THE COMMENT BELOW GIVES: an artifact survives a failed
+      #    job, so a check that runs AFTER `Publish release` cannot stop a
+      #    broken binary from shipping -- it only records that we shipped
+      #    one. This check exists precisely to keep a non-relocatable tree
+      #    off the download page.
+      # ⭐ KEEP THE BUILD — AFTER oa-selftest, DELIBERATELY. An artifact
+      #    survives a failed job, so packaging before the tests publishes a
+      #    binary nothing vouched for. Downstream (product_1) consumes this,
+      #    so it must not exist unless the selftest passed.
+      # ⭐ KEEP THE BUILD. This repository is public, so macOS runners here are
+      #    free — which makes this the project's always-available Apple Silicon
+      #    builder. A private repo cannot do this job: macOS bills at 10x there,
+      #    and one build would be a large fraction of a monthly allowance.
+      # ⇒ Downstream packaging (Homebrew bottles, the Verdon product package)
+      #   consumes this artifact instead of rebuilding the toolchain.
+      # ⚠ LGPL v2.1 obliges us to make the corresponding source available
+      #   alongside a distributed binary. It is this repository, at the commit
+      #   named in BUILD-INFO below, which is why that file is written here
+      #   rather than assumed.
+      - name: Record what was built
+        run: |
+          cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF
+          repository : ${{ github.repository }}
+          commit     : ${{ github.sha }}
+          ref        : ${{ github.ref_name }}
+          run        : ${{ github.run_id }}
+          built      : $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner     : $(sw_vers -productName) $(sw_vers -productVersion) $(uname -m)
+
+          Licensed LGPL v2.1. Corresponding source is the repository and commit
+          above: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+          EOF
+          cat ${{ github.workspace }}/local/BUILD-INFO
+
+      - name: Package the prefix
+        run: |
+          cd ${{ github.workspace }}
+          tar -czf openasip-macos-arm64.tar.gz local
+          ls -lh openasip-macos-arm64.tar.gz
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: openasip-macos-arm64
+          path: openasip-macos-arm64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      # ⭐ THE PERMANENT URL. The artifact above expires in 30 days, which is fine
+      #    for CI and useless for a package manager: a Homebrew bottle's URL must
+      #    outlive the run that produced it.
+      # ⚠ Runs ONLY on a tag, and only after oa-selftest, so a published binary is
+      #   always one a passing build produced.
+      - name: Checksum
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cd ${{ github.workspace }}
+          shasum -a 256 openasip-macos-arm64.tar.gz > openasip-macos-arm64.tar.gz.sha256
+          cat openasip-macos-arm64.tar.gz.sha256
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd ${{ github.workspace }}
+          cat > NOTES.md <<'EOF'
+          OpenASIP toolchain for macOS on Apple Silicon (arm64), built and
+          self-tested by CI from a clean checkout.
+
+          The archive expands to a `local/` prefix containing OpenASIP and the
+          patched LLVM it requires. `local/BUILD-INFO` records the commit, the
+          run and the runner.
+
+          Licensed LGPL v2.1. The corresponding source is this repository at the
+          commit named in BUILD-INFO.
+
+          Verify:
+
+              shasum -a 256 -c openasip-macos-arm64.tar.gz.sha256
+          EOF
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "OpenASIP macOS arm64 ${GITHUB_REF_NAME}" \
+            --notes-file NOTES.md \
+            openasip-macos-arm64.tar.gz \
+            openasip-macos-arm64.tar.gz.sha256
+
+      # ⛔ NOT RUN HERE, AND SAID OUT LOUD RATHER THAN OMITTED: the QEMU install,
+      #    the unit-test suite and systemtest.py are exercised by the Linux job.
+      #    They carry Linux assumptions that have not been checked on macOS, and a
+      #    job that silently skipped them would report a green covering less than
+      #    a reader would assume. Widen this deliberately, with evidence, not by
+      #    adding steps and hoping.
+      - name: What this job did and did not cover
+        if: always()
+        run: |
+          echo "Covered : configure, build, install, oa-selftest, and relocatability (the tree is moved and compiled binaries are run from it) on macOS/arm64 from a clean checkout."
+          echo "NOT here: QEMU-OpenASIP, unit tests, systemtest.py — see the Linux job."

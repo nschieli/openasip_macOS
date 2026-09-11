@@ -63,51 +63,68 @@ class TCETestCase(unittest.TestCase):
 
         Returns a tuple: (bool:timeout, str:stdout, str:stderr, int:exitcode)
         """
-        timePassed = 0.0
-        increment = 0.01
-
+        # This used to hand-roll a poll() loop around a child whose stdout and
+        # stderr are pipes, and it deadlocked. Three separate faults:
+        #
+        #  1. NOTHING DRAINED THE PIPES while the loop spun. As soon as a child
+        #     wrote more than the OS pipe buffer (64 KB) it blocked in write(),
+        #     so it never exited, so poll() never returned non-None, so the
+        #     loop span forever. Popen.communicate() reads both pipes
+        #     concurrently and is the only correct way to do this.
+        #
+        #  2. close_fds=False handed every EXTRA inherited descriptor to the
+        #     child and its descendants. communicate() returns when the write
+        #     ends of the pipes are all closed, so any descendant holding one
+        #     open kept it waiting for an EOF that never came -- a hang with no
+        #     obvious culprit in the process tree.
+        #
+        #  3. THE TIMEOUT PATH DID NOT KILL ANYTHING. os.kill(pid, SIGTSTP)
+        #     SUSPENDS a process; it does not terminate it. The old code then
+        #     called communicate() on the stopped child and blocked there
+        #     forever, so "timing out" was itself a way to hang.
+        #
+        # start_new_session puts the child in its own process group so a
+        # timeout can kill the WHOLE tree; with shell=True, killing only
+        # process.pid would kill the shell and orphan the real workload.
         process = subprocess.Popen(
             command, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, universal_newlines=True, close_fds=False
+            stderr=subprocess.PIPE, universal_newlines=True,
+            start_new_session=True
         )
 
-        if process is None:
-            print("Could not create process")
-            sys.exit(1)
+        def killProcessTree():
+            """SIGKILLs the child's whole process group, tolerating races."""
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    process.kill()
+                except OSError:
+                    pass
 
         try:
-            if inputStream != "":
-                for line in inputStream:
-                    process.stdin.write(line)
-                    process.stdin.flush()
-
-            while True:
-                status = process.poll()
-                if status is not None:
-                    # Process terminated succesfully.
-                    stdout, stderr = process.communicate()
-                    return (False, stdout, stderr, process.returncode)
-
-                if timePassed < timeoutSecs:
-                    time.sleep(increment)
-                    timePassed = timePassed + increment
-                else:
-                    # time out, kill the process.
-                    os.kill(process.pid, signal.SIGTSTP)
-                    stdout, stderr = process.communicate()
-                    return (True, stdout, stderr, process.returncode)
-        except Exception:
-            # if something threw exception (e.g. ctrl-c)
-            os.kill(process.pid, signal.SIGTSTP)
-            stdout = ''
-            stderr = ''
+            stdout, stderr = process.communicate(
+                input=inputStream if inputStream != "" else None,
+                timeout=timeoutSecs)
+            return (False, stdout, stderr, process.returncode)
+        except subprocess.TimeoutExpired:
+            killProcessTree()
+            # The pipes are still ours to drain; the tree is dead, so this
+            # returns promptly and gives the caller the partial output.
             try:
-                # time out, kill the process.
-                os.kill(process.pid, signal.SIGTSTP)
-                stdout, stderr = process.communicate()
+                stdout, stderr = process.communicate(timeout=60)
             except Exception:
-                pass
-
+                stdout = ''
+                stderr = ''
+            return (True, stdout, stderr, process.returncode)
+        except Exception:
+            # e.g. ctrl-c
+            killProcessTree()
+            try:
+                stdout, stderr = process.communicate(timeout=60)
+            except Exception:
+                stdout = ''
+                stderr = ''
             return (False, stdout, stderr, process.returncode)
 
     def get_helloWorldCFile(self):
@@ -231,6 +248,7 @@ class TestCompiler(TCETestCase):
         self.assertEqual(stdout.strip(), "OK")
         self.assertEqual(stderr, "")
         self.assertEqual(code, 0)
+
 
 
 class TestSimulator(TCETestCase):

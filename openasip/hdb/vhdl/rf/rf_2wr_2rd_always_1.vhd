@@ -111,7 +111,7 @@ BEGIN
       -- Asynchronous Reset
       IF (rstx = '0') THEN
          -- Reset Actions
-         for idx in (reg'length-1) downto 0 loop
+         for idx in rf_size-1 downto 0 loop
              reg(idx) <= (others => '0');
          end loop;  -- idx
 

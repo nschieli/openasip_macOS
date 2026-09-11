@@ -46,6 +46,7 @@
 #include <signal.h>
 
 #include <sys/types.h>
+#include <dlfcn.h>   // dladdr -- see Application::installationDir
 // macros to evaluate exit status of pclose() (from autoconf manual)
 #ifdef HAVE_SYS_WAIT_H
 # include <sys/wait.h>
@@ -568,5 +569,40 @@ Application::installationDir() {
         userRoot + "/share/openasip/data/icons")) {
         return userRoot;
     }
+
+    // Derive the prefix from where THIS LIBRARY actually is, so a tree that
+    // was moved after `make install` still finds its own data files.
+    //
+    // Without this the only answers were an environment variable and
+    // TCE_INSTALLATION_ROOT -- the path configure was given -- so an installed
+    // tree that is relocated (a Homebrew bottle, an unpacked release tarball,
+    // anything the VS Code extension downloads) looks for its XML schema and
+    // opset where it was BUILT. Measured: binaries linked fine and started,
+    // then ttasim answered `No schema file set.` on a machine it was handed.
+    //
+    // dladdr resolves the containing library rather than the executable on
+    // purpose: it is right for every client at once, including the plugins
+    // tcecc compiles on demand and any program that merely links libopenasip.
+    // <prefix>/lib/libopenasip.N.dylib -> <prefix>.
+    //
+    // It is checked against the SAME marker as TCE_INSTALL_DIR above, and the
+    // env var still wins: an explicit answer beats a derived one, and a
+    // derived one beats a compiled-in one that may no longer exist.
+    {
+        Dl_info info;
+        if (dladdr(reinterpret_cast<const void*>(&Application::installationDir),
+                   &info) != 0 && info.dli_fname != NULL) {
+            string libPath = FileSystem::absolutePathOf(string(info.dli_fname));
+            if (libPath != "") {
+                string libDir = FileSystem::directoryOfPath(libPath);
+                string selfRoot = FileSystem::directoryOfPath(libDir);
+                if (selfRoot != "" && FileSystem::fileExists(
+                        selfRoot + "/share/openasip/data/icons")) {
+                    return selfRoot;
+                }
+            }
+        }
+    }
+
     return string(TCE_INSTALLATION_ROOT);
 }

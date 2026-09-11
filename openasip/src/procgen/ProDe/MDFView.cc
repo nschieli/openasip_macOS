@@ -32,6 +32,7 @@
  */
 
 #include <wx/dcps.h>
+#include <wx/sizer.h>
 #include <string>
 #include "MDFView.hh"
 #include "tce_config.h"
@@ -117,13 +118,47 @@ MDFView::OnCreate(wxDocument* doc, long) {
     wxDocMDIParentFrame* mainFrame = wxGetApp().mainFrame();
     frame_ = new ChildFrame(doc, this, mainFrame);
     SetFrame(frame_);
-    frame_->Show(true);
 
-    // create a canvas for the child frame
-    canvas_ = new MachineCanvas(frame_, new ProDeEditPolicyFactory(), frame_);
+    // Which window actually hosts the canvas differs by platform.
+    //
+    // wxOSX has NO real MDI: wx/osx/mdi.h un-overrides IsTopLevel() back to
+    // true for wxMDIChildFrame, so a "child" frame is a separate top-level
+    // window and there is no client area for it to sit inside. Showing it
+    // gives two windows -- a near-empty parent holding the menu bar and status
+    // bar, and a detached document window -- which is not what the editor is
+    // meant to look like. So on Darwin the ChildFrame is kept alive but never
+    // shown (the doc/view framework still needs it as the view's frame, and
+    // ChildFrame::setStatus already writes to the PARENT's status bar), and
+    // the canvas is hosted directly in the main frame. One window, menus in
+    // the macOS menu bar where they belong, canvas embedded.
+    //
+    // Everywhere else, MDI is real and the child frame is shown as usual.
+    wxWindow* canvasHost = NULL;
+#ifdef __WXOSX__
+    canvasHost = mainFrame;
+#else
+    frame_->Show(true);
+    canvasHost = frame_;
+#endif
+
+    // create a canvas for the hosting frame
+    canvas_ = new MachineCanvas(canvasHost, new ProDeEditPolicyFactory(), frame_);
     // create select tool and set it as active tool for the canvas
     SelectTool* selectTool = new SelectTool(frame_, this);
     canvas_->setTool(selectTool);
+
+    // The canvas is constructed with no explicit size, into a frame that has
+    // already been Show()n above, and ChildFrame installs no sizer. On GTK the
+    // realize/size-allocate cycle happens to resize the frame's single child
+    // to fill it, so this was never noticed. wxOSX lays the frame out when it
+    // is shown, so a child added afterwards keeps its default size and the
+    // canvas is invisible -- the window comes up empty. Give the frame a real
+    // sizer instead of relying on the single-child fallback; this is the
+    // portable idiom and behaves identically on GTK.
+    wxBoxSizer* frameSizer = new wxBoxSizer(wxVERTICAL);
+    frameSizer->Add(canvas_, 1, wxEXPAND);
+    canvasHost->SetSizer(frameSizer);
+    canvasHost->Layout();
 
     Activate(true);
     return true;

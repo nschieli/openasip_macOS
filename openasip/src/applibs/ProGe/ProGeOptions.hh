@@ -46,7 +46,8 @@ struct ProGeOptions {
         : generateTestbench(false), clockFrequency(1),
           useAbsolutePaths(false), listAvailableIntegrators(false),
           forceOutputDirectory(false), asyncReset(true), syncReset(false),
-          preferHDLGeneration(false), resetAllRegisters(true) {
+          preferHDLGeneration(false), resetAllRegisters(true),
+          selectRFFromHDB(false) {
         validate();
     }
 
@@ -79,6 +80,7 @@ struct ProGeOptions {
           icdArgList(cmd.icdArgList()),
           preferHDLGeneration(cmd.preferHDLGeneration()),
           resetAllRegisters(cmd.resetAllRegisters()),
+          selectRFFromHDB(cmd.selectRFFromHDB()),
           fuBackRegistered(cmd.fuBackRegistered()),
           fuFrontRegistered(cmd.fuFrontRegistered()),
           fuMiddleRegistered(cmd.fuMiddleRegistered()),
@@ -97,7 +99,8 @@ struct ProGeOptions {
           coproInterface(cmd.interFace()),
           entityName(cmd.entityName()),
           hdbList(cmd.hdbList()),
-          preferHDLGeneration(true) {
+          preferHDLGeneration(true),
+          selectRFFromHDB(false) {
         validate();
     }
 
@@ -133,6 +136,10 @@ struct ProGeOptions {
     std::vector<std::pair<std::string, std::string>> icdArgList;
     bool preferHDLGeneration = false;
     bool resetAllRegisters = true;
+    // Opt-in: take RF implementations from the HDBs instead of always
+    // generating them. Default false = OpenASIP's behaviour before RF
+    // selection existed. See ProGeUI::generateIDF for why it is opt-in.
+    bool selectRFFromHDB = false;
     std::vector<std::string> fuBackRegistered;
     std::vector<std::string> fuFrontRegistered;
     std::vector<std::string> fuMiddleRegistered;

@@ -33,6 +33,7 @@
 #define TTA_TCE_STUB_TARGET_MACHINE_HH
 
 #include <llvm/CodeGen/CodeGenTargetMachineImpl.h>
+#include "SystemMacroCleanup.hh"
 #include <llvm/CodeGen/TargetLowering.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Target/TargetMachine.h>

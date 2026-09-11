@@ -105,6 +105,7 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/CodeGen/MachineMemOperand.h>
 #include <llvm/CodeGen/MachineConstantPool.h>
 #include <llvm/CodeGen/TargetInstrInfo.h>
+#include "SystemMacroCleanup.hh"
 #include <llvm/CodeGen/TargetLowering.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Support/Debug.h>
@@ -336,14 +337,20 @@ LLVMTCEBuilder::initDataSections() {
         def.addressSpaceId =
             cast<PointerType>(gv.getType())->getAddressSpace();
         def.alignment =
+// NOTE: both arguments must be cast to uint64_t, not to `long unsigned int`.
+// llvm::Align::value() returns uint64_t, which IS `unsigned long` on Linux
+// LP64 but `unsigned long long` on macOS -- distinct types. std::max deduces
+// a single _Tp from both arguments, so the old cast made deduction fail on
+// macOS ("deduced conflicting types for parameter '_Tp'"). uint64_t is the
+// type actually being compared and is correct on both platforms.
 #if LLVM_MAJOR_VERSION < 21
             std::max(
-                gvAlign.has_value() ? gvAlign->value() : 0,
-                (long unsigned int)(dl_->getPrefTypeAlignment(type)));
+                gvAlign.has_value() ? gvAlign->value() : (uint64_t)0,
+                (uint64_t)(dl_->getPrefTypeAlignment(type)));
 #else
             std::max(
-                gvAlign.has_value() ? gvAlign->value() : 0,
-                (long unsigned int)(dl_->getPrefTypeAlign(type).value()));
+                gvAlign.has_value() ? gvAlign->value() : (uint64_t)0,
+                (uint64_t)(dl_->getPrefTypeAlign(type).value()));
 #endif
         def.size = dl_->getTypeStoreSize(type);
         // memcpy seems to assume global values are aligned by 4
@@ -828,6 +835,9 @@ LLVMTCEBuilder::createGlobalValueDataDefinition(
         def = new TTAProgram::DataAddressDef(
             start, sz, ref, mach_->isLittleEndian());
     } else {
+        std::cerr << "Global value label not found: '" << label
+                  << "' (GV name: " << gv->getName().str()
+                  << ", offset: " << offset << ")" << std::endl;
         assert(false && "Global value label not found!");
     }
     addr += def->size();
@@ -3522,8 +3532,11 @@ LLVMTCEBuilder::emitGlobalXXtructorCalls(
             // '{ int, void ()*, i8* }' structs for LLVM 3.5.
             // The first value is the init priority, which we ignore.
             auto init = gv->getInitializer();
+            // ConstantArray: has structured entries (ConstantStruct elements)
+            // ConstantAggregateZero / ConstantDataArray / others: empty or
+            // zero-initialized — no constructors to call, skip safely
             if (!isa<ConstantArray>(init)) {
-                abortWithError("Global array initializer not ConstantArray.");
+                return firstInstruction;
             }
             const ConstantArray* initList = cast<const ConstantArray>(init);
             for (unsigned i = 0, e = initList->getNumOperands(); i != e; ++i) {

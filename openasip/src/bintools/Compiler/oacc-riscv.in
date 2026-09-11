@@ -99,16 +99,81 @@ def newlibLibdir():
     else:
         return os.path.join("@abs_top_builddir@", "newlib-1.17.0/riscv-llvm/riscv/newlib")
 
+# The RISC-V GNU toolchain (tools/scripts/install_riscv_tools.sh) is OPTIONAL.
+# Every job it does here has an equivalent in the LLVM this build already ships:
+#   assembling the generated _start stub -> llvm-mc with the OpenASIP RISC-V
+#     target plugin loaded (clang itself has no RISC-V backend compiled in;
+#     the plugin registers one, which is what makes this work at all)
+#   linking                              -> ld.lld
+#   the compiler runtime (libgcc)        -> compiler-rt builtins for riscv32
+#     (tools/scripts/install_riscv_builtins.sh)
+#   elf2hex                              -> llvm-objcopy plus the word split
+# When the GNU toolchain IS installed it is used, so platforms that have it
+# behave exactly as before.
+# The prefix is overridable because distributions do not agree on it: Ubuntu
+# ships riscv64-unknown-elf-, Homebrew riscv64-elf-.
+RISCV_TOOL_PREFIX = os.environ.get("OA_RISCV_TOOL_PREFIX", "riscv32-unknown-elf-")
+
+# Built by tools/scripts/install_riscv_builtins.sh into newlibLibdir().
+BUILTINS_LIB_NAME = "clang_rt.builtins-riscv32"
+
+def gnuTool(name):
+    """Path to a RISC-V GNU toolchain tool, or None when it is not installed."""
+    return which(RISCV_TOOL_PREFIX + name)
+
 #find path for libgcc
 def rtLibInclude():
-    (exitCode, path) = subprocess.getstatusoutput("riscv32-unknown-elf-gcc -print-libgcc-file-name")
+    gcc = gnuTool("gcc")
+    if gcc is None:
+        return None
+    (exitCode, path) = subprocess.getstatusoutput(gcc + " -print-libgcc-file-name")
     if exitCode != 0 :
         exitWithError(path)
     return os.path.dirname(path)
 
+def runtimeLibFlags():
+    """Returns (library dir flags, library name flags) for the compiler runtime.
+
+    RV32IM has no FPU and no 64-bit ALU, so float math and 64-bit division are
+    lowered to calls into a compiler runtime (__mulsf3, __divdi3, ...). That is
+    libgcc with the GNU toolchain, and compiler-rt builtins without it.
+    """
+    libgccDir = rtLibInclude()
+    if libgccDir is not None:
+        return ("-L " + libgccDir + " ", "-lgcc ")
+    builtins = os.path.join(newlibLibdir(), "lib" + BUILTINS_LIB_NAME + ".a")
+    if os.path.isfile(builtins):
+        return ("-L " + newlibLibdir() + " ", "-l" + BUILTINS_LIB_NAME + " ")
+    warnMissingRuntimeLib(builtins)
+    return ("", "")
+
+def warnMissingRuntimeLib(expectedPath):
+    """Warn (once per run) that no compiler runtime library is available.
+
+    Integer-only programs link without one. Anything using float math or 64-bit
+    division does not, and the failure is otherwise a bare "undefined symbol:
+    __divdi3" at link time that names no remedy.
+    """
+    if warnMissingRuntimeLib.warned: return
+    warnMissingRuntimeLib.warned = True
+    sys.stderr.write(
+        "oacc-riscv: warning: no compiler runtime library found; linking "
+        "without one.\n"
+        "  Neither the RISC-V GNU toolchain (%sgcc, for libgcc) nor\n"
+        "  %s is installed.\n"
+        "  Integer-only programs link fine; float math and 64-bit division "
+        "will fail\n"
+        "  at link time with undefined __mulsf3 / __divdi3 and similar. "
+        "Install with:\n"
+        "    openasip/tools/scripts/install_riscv_builtins.sh <install_prefix>\n"
+        % (RISCV_TOOL_PREFIX, expectedPath))
+warnMissingRuntimeLib.warned = False
+
+
 def stdLibFlags():
+    (runtimeDirFlag, _) = runtimeLibFlags()
     flags = ""
-    flags += "-L " + rtLibInclude() + " "
+    flags += runtimeDirFlag
     flags += "-L " + newlibLibdir() + " "
     return str(flags)
 
@@ -225,7 +290,10 @@ def compileLLVMTargetPlugin():
     with open(llvmInstallPrefix + "/include/llvm/Config/config.h", 'w'):
         pass
 
-    cmd = "make -j$(nproc)"
+    # nproc is GNU coreutils and does not exist on macOS/BSD, where the
+    # substitution would collapse to a bare `make -j` (UNBOUNDED parallelism).
+    # Ask Python for the CPU count instead of shelling out.
+    cmd = "make -j%d" % (os.cpu_count() or 1)
     if options.tce_build_mode:
         cmd = "make"
 
@@ -430,7 +498,7 @@ def optimizeBytecode(inFile):
         optSwitches = (" -internalize "+ default_opts)
     
     internalize_api_list = " -internalize-public-api-list=" \
-                           "_start,_pthread_start,_dthread_start,memcpy"
+                           "_start,_pthread_start,_dthread_start,memcpy,memset,__dso_handle"
     if options.keep_symbols != "":
         internalize_api_list += "," + options.keep_symbols
 
@@ -510,9 +578,12 @@ def compile_to_bitcode(input_files):
 
     for input_file in input_files:
         bc_file = create_temp_file(input_file.replace("/", ".") + ".bc")
+        file_flags = compileFlags
+        suffix = os.path.splitext(input_file)[1].lower()
+
         retval = \
             run_command("clang -march=rv32im -target %s -D__OA_RISCV__ -I %s %s -c -emit-llvm %s -o %s" % \
-            (options.march, tempDir, compileFlags, input_file, bc_file), echoCmd=options.verbose)
+            (options.march, tempDir, file_flags, input_file, bc_file), echoCmd=options.verbose)
 
         if retval != 0: cleanup_and_exit(retval)
         bc_files.append(bc_file)
@@ -540,22 +611,42 @@ def generate_code(bc_file, objectCode=True, output=None):
     return [asm_file] 
 
 
+def assembleInitCode(init_asm, init_out):
+    """Assembles the generated _start stub. Returns the exit code.
+
+    Uses the GNU assembler when the RISC-V GNU toolchain is installed, so
+    nothing changes where it is. Otherwise llvm-mc does it with the OpenASIP
+    RISC-V target plugin loaded — exactly what assemble() already does for
+    user-supplied .S files.
+    """
+    gcc = gnuTool("gcc")
+    if gcc is not None:
+        return run_command("%s -D__OA_RISCV__ -c %s -o %s" % (gcc, init_asm, init_out),
+                           echoCmd=options.verbose, echoStderr=options.verbose,
+                           echoStdout=options.verbose)
+    preprocessed = create_temp_file(".s")
+    retval = run_command("clang -E -D__OA_RISCV__ %s -o %s" % (init_asm, preprocessed),
+                         echoCmd=options.verbose)
+    if retval != 0:
+        return retval
+    return run_command("llvm-mc --filetype=obj -load %s --arch %s %s -o %s" %
+                       (getLLVMTargetPlugin(), options.march, preprocessed, init_out),
+                       echoCmd=options.verbose)
+
 def link(obj_files, output):
-    if which("ld.lld") is None:
-        exitWithError("lld must be installed for linking")
-    if which("riscv32-unknown-elf-gcc") is None:
-        exitWithError("RISCV GNU Toolchain must be installed")
+    gnuLd = gnuTool("ld")
+    useLld = options.lld or gnuLd is None
+    if useLld and which("ld.lld") is None:
+        exitWithError("No linker found: neither " + RISCV_TOOL_PREFIX +
+                      "ld (RISC-V GNU toolchain) nor ld.lld")
     init_asm = os.path.join(tempDir, "init.S")
     init_out = os.path.join(tempDir, "init.o")
     link_script = os.path.join(tempDir, "riscv.ld")
-    command = "riscv32-unknown-elf-gcc -D__OA_RISCV__ -c %s -o %s" % (init_asm, init_out)
-    retval = run_command(command, echoCmd=options.verbose,
-                         echoStderr=options.verbose, echoStdout=options.verbose)
+    retval = assembleInitCode(init_asm, init_out)
 
     if retval != 0:
         exitWithError(retval, "Error in compiling. Run with -v to see verbose output")
     obj_files = " ".join(obj_files)
-    if retval != 0: cleanup_and_exit(retval)
     lib_names = ""
     lib_dirs = ""
     for lib_name in options.lib_name:
@@ -564,13 +655,16 @@ def link(obj_files, output):
         lib_dirs += "-L " + lib_dir + " "
 
     extra_flags = stdLibFlags()
+    (_, runtimeLib) = runtimeLibFlags()
+    std_libs = "-lc -lm " + runtimeLib
 
-    command = "riscv32-unknown-elf-ld  %s %s %s -Ttext=0 -T %s %s %s -o %s -lc -lm -lgcc" % \
-        (lib_names, lib_dirs, extra_flags, link_script, init_out, obj_files, output)
-
-    if options.lld:
-        command = "ld.lld -lc -lm -lgcc  %s %s %s -Ttext=0 -T %s %s %s -o %s" % \
-        (lib_names, lib_dirs, extra_flags, link_script, init_out, obj_files, output)
+    if useLld:
+        command = "ld.lld %s %s %s %s -Ttext=0 -T %s %s %s -o %s" % \
+        (std_libs, lib_names, lib_dirs, extra_flags, link_script, init_out, obj_files, output)
+    else:
+        command = "%sld  %s %s %s -Ttext=0 -T %s %s %s -o %s %s" % \
+        (RISCV_TOOL_PREFIX, lib_names, lib_dirs, extra_flags, link_script, init_out,
+         obj_files, output, std_libs)
 
     retval = run_command(command, echoCmd=options.verbose,
                          echoStderr=options.verbose, echoStdout=options.verbose)
@@ -661,16 +755,44 @@ def generate_start_func():
     text_file.write(start_func)
     text_file.close()
 
+def elf_to_hex_with_llvm(elf_file, hex_file, bit_width=32):
+    """elf2hex's job, done with llvm-objcopy.
+
+    The format oa-hex2bin consumes is one hex value per line, in address order,
+    with at most bit_width/4 digits. llvm-objcopy -O binary lays the loadable
+    sections out by address (padding the gaps), which is the same image; all
+    that is left is splitting it into little-endian words.
+    """
+    if which("llvm-objcopy") is None:
+        exitWithError(1, "Cannot generate an image: neither " +
+                      RISCV_TOOL_PREFIX + "elf2hex nor llvm-objcopy is installed")
+    bin_file = create_temp_file(".rawbin")
+    retval = run_command("llvm-objcopy -O binary %s %s" % (elf_file, bin_file),
+                         echoCmd=options.verbose)
+    if retval != 0:
+        exitWithError(retval, "Error converting the ELF to a memory image")
+    bytes_per_word = bit_width // 8
+    digits = bit_width // 4
+    with open(bin_file, "rb") as src, open(hex_file, "w") as dst:
+        while True:
+            word = src.read(bytes_per_word)
+            if not word:
+                break
+            # The last word of an image whose size is not a whole number of
+            # words is zero-padded, exactly as it would sit in memory.
+            word = word.ljust(bytes_per_word, b"\x00")
+            dst.write("%0*x\n" % (digits, int.from_bytes(word, "little")))
+
 def generate_image(options, elf_file, final_output):
-    if which("riscv32-unknown-elf-elf2hex") is None:
-        exitWithError("elf2hex must be installed for \
-        generating RISC-V images as a text file")
     hex_file = final_output
     if options.output_format == "bin":
         hex_file = create_temp_file(".hex")
     if options.output_format == "bin" or options.output_format == "hex":
-        run_command("riscv32-unknown-elf-elf2hex --bit-width 32 \
+        if gnuTool("elf2hex") is not None:
+            run_command(RISCV_TOOL_PREFIX + "elf2hex --bit-width 32 \
         --input " + elf_file + " > " + hex_file)
+        else:
+            elf_to_hex_with_llvm(elf_file, hex_file, 32)
         if options.output_format == "bin":
             run_command("oa-hex2bin \
             -w 32 -o " + final_output + " " + hex_file)
@@ -679,18 +801,23 @@ def check_input_files(input_files):
     if len(input_files) == 0:
         exitWithError(1, "No input files given")
     else:
-        first_extension = None
+        c_like_exts = ['c', 'cpp', 'cc']
+        asm_exts = ['s']  # covers both .s and .S via .lower()
+        has_c_like = False
+        has_asm = False
         for file in input_files:
             file_extension = file.split('.')[-1]
-            if first_extension is None:
-                first_extension = file_extension
-            elif file_extension != first_extension:
-                exitWithError(1, "All files must have the same extension")
-            if file_extension.lower() not in ['c', 's', 'S']:
-                exitWithError(1, "The file extension must be .c, .s, or .S")
-        
-        # Check if all files have 's' or 'S' extension
-        if first_extension.lower() in ['s', 'S']:
+            if file_extension.lower() in c_like_exts:
+                has_c_like = True
+            elif file_extension.lower() in asm_exts:
+                has_asm = True
+            else:
+                exitWithError(1, "Unsupported file extension: .%s (expected .c, .cpp, .cc, .s, or .S)" % file_extension)
+        if has_c_like and has_asm:
+            exitWithError(1, "Cannot mix C/C++ and assembly files")
+
+        # Check if all files are assembly
+        if has_asm and not has_c_like:
             return True
     return False
 

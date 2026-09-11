@@ -1,0 +1,10 @@
+2124847920
+
+
+bus utilization:
+B1                30995  (91.42%)  2909  (8.58%)
+
+bus utilization totals:
+buses 1
+cycles 33904
+

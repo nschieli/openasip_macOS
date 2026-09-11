@@ -36,6 +36,7 @@
 
 #include <string>
 #include <iostream>
+#include <exception>
 
 #include "GenerateProcessor.hh"
 #include "ProGeCmdLineOptions.hh"
@@ -50,6 +51,8 @@
 #include "KoskiIntegrator.hh"
 #include "AvalonIntegrator.hh"
 #include "AlmaIFIntegrator.hh"
+#include "LatticeECP5Integrator.hh"
+#include "LatticeNexusIntegrator.hh"
 #include "MemoryGenerator.hh"
 #include "StringTools.hh"
 
@@ -181,9 +184,15 @@ GenerateProcessor::generateProcessor(int argc, char* argv[]) {
         return false;
     } catch (const Exception& e) {
         cerr << e.errorMessage() << endl;
-        cerr << "Exception thrown at: " << e.fileName() << ":" 
+        cerr << "Exception thrown at: " << e.fileName() << ":"
              << e.lineNum() << endl;
         cerr << "  message: " << e.errorMessage() << endl;
+        return false;
+    } catch (const std::exception& e) {
+        // Safety net: any non-OpenASIP exception (e.g. a std::runtime_error
+        // from a plugin) becomes a clean error instead of escaping main() ->
+        // std::terminate (SIGABRT).
+        cerr << "Error: " << e.what() << endl;
         return false;
     }
 
@@ -379,6 +388,8 @@ GenerateProcessor::listIntegrators() const {
     integrators.push_back(new KoskiIntegrator());
     integrators.push_back(new AvalonIntegrator());
     integrators.push_back(new AlmaIFIntegrator());
+    integrators.push_back(new LatticeECP5Integrator());
+    integrators.push_back(new LatticeNexusIntegrator());
 
     for (unsigned int i = 0; i < integrators.size(); i++) {
         integrators.at(i)->printInfo(std::cout);

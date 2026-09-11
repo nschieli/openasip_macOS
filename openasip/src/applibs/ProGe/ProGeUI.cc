@@ -642,13 +642,60 @@ ProGeUI::generateIDF(
         }
     }
 
+    // Only reached with --select-rf-from-hdb; see the note below.
+    auto selectRFHDBImplementations = [&]() {
+        for (auto&& rf : machine_->registerFileNavigator()) {
+            if (alreadyHandled(rf->name(), handledRFs)) {
+                continue;
+            }
+            verbose << " select implementation for " << rf->name() << "... ";
+            RFImplementationLocation* loc =
+                new RFImplementationLocation("", -1, rf->name());
+            if (ProGeTools::checkForSelectableRF(
+                    options, *rf, *loc, verbose)) {
+                verbose << "OK (selected " << loc->id() << " from "
+                        << loc->hdbFile() << ")\n";
+                idf_->addRFImplementation(loc);
+                handledRFs.emplace_back(rf->name());
+            } else {
+                delete loc;
+                verbose << "not in HDB, will generate\n";
+            }
+        }
+    };
+
+    // RFs. Generate from the ADF unless HDB selection was explicitly asked
+    // for with --select-rf-from-hdb.
+    //
+    // Selecting from an HDB is OPT-IN, and deliberately so. RFGen derives the
+    // RF from the ADF, so it cannot disagree with the machine it implements.
+    // An HDB entry is a hand-maintained CLAIM about a hand-written RTL file,
+    // nothing checks the claim against the RTL, and two entries have already
+    // been caught making a wrong one -- in two different ways:
+    //
+    //   generate_rf_iu.hdb entry 39 declared guard_latency=0 for
+    //   rf_1wr_1rd_lat1_guard1.v, whose guard has no same-cycle write bypass
+    //   and is therefore latency 1. A wrong DECLARATION, since fixed.
+    //
+    //   asic_130nm_1.5V.hdb entry 1739 uses
+    //   rf_1wr_2rd_always_1_zero_reg.vhd, whose reset does
+    //   `reg(2) <= to_signed(-4096, 32)` -- a RISC-V stack pointer init baked
+    //   into a register file. Its declaration is CORRECT; no HDB column can
+    //   express an initial register value at all.
+    //
+    // The second is why this is a switch rather than better validation: the
+    // schema cannot describe the behaviour, so no amount of checking the
+    // declaration would catch it. Silently preferring HDB made every such
+    // claim a processor-correctness dependency that nobody opted into.
+    if (options.selectRFFromHDB) {
+        selectRFHDBImplementations();
+    }
     for (auto&& rf : machine_->registerFileNavigator()) {
         if (alreadyHandled(rf->name(), handledRFs)) {
             continue;
         }
         verbose << " generate implementation for " << rf->name() << "... ";
         IDF::RFGenerated rfg(rf->name());
-        // Assume that we can always generate the missing RFs.
         verbose << "OK\n";
         idf_->addRFGeneration(rfg);
         handledRFs.emplace_back(rfg.name());
@@ -674,9 +721,17 @@ ProGeUI::generateIDF(
         } else if (delaySlots == 2) {
             idf_->setICDecoderParameter("bypassinstructionregister", "yes");
         } else {
-            throw std::runtime_error(
-                "Cannot decide ICDecoder parameters for " +
-                std::to_string(delaySlots) + "-stage GCU.");
+            // Throw an OpenASIP Exception (not std::runtime_error) so the
+            // generateprocessor frontend catches it and prints a clean error
+            // instead of letting it escape main() -> std::terminate (SIGABRT).
+            std::string errorMsg =
+                "Cannot auto-derive IC/Decoder parameters for a " +
+                std::to_string(delaySlots) +
+                "-delay-slot GCU. The DefaultICDecoder only auto-configures "
+                "control units with 2 or 3 delay slots. Supply an IDF that "
+                "sets the IC/Decoder parameters, or use a control unit with "
+                "3 delay slots.";
+            throw InvalidData(__FILE__, __LINE__, __func__, errorMsg);
         }
     }
 }

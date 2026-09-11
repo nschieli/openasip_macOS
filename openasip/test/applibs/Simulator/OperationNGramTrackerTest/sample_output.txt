@@ -1,0 +1,23 @@
+1
+16382
+
+
+bigram histograms:
+ADD -> LD32          634  (15.30%)
+ST32 -> ADD          461  (11.12%)
+ADD -> ST32          385  (9.29%)
+LD32 -> ADD          380  (9.17%)
+ADD -> ADD           233  (5.62%)
+
+trigram histograms:
+ADD -> LD32 -> ADD   318  (7.68%)
+ADD -> ST32 -> ADD   266  (6.42%)
+ST32 -> ADD -> LD32  203  (4.90%)
+LD32 -> ADD -> LD32  148  (3.57%)
+ST32 -> ADD -> ST32  139  (3.36%)
+
+n-gram totals:
+operations 4145
+bigrams 4144
+trigrams 4143
+

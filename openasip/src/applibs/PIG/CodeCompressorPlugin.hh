@@ -243,9 +243,9 @@ private:
         unsigned int registerIndex);
     void initializeRelocations();
     static void addBits(
-        unsigned int number, 
+        unsigned int number,
         int leftmostBit,
-        int rightmostBit, 
+        int rightmostBit,
         BitVector& bitVector);
     TTAProgram::Terminal* immediateTerminal(
         const TPEF::CodeSection& codeSection,

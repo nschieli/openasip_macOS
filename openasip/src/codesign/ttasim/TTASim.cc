@@ -252,14 +252,19 @@ int main(int argc, char* argv[]) {
     }
 
     
-    if (options->debugMode()) {        
-        cli->run();   
+    if (options->debugMode()) {
+        cli->run();
         Application::restoreSignalHandler(SIGINT);
         if (simFront->isCompiledSimulation()) {
             Application::restoreSignalHandler(SIGFPE);
             Application::restoreSignalHandler(SIGSEGV);
-        }        
+        }
     }
+
+    if (options->printCycles() && simFront->isProgramLoaded()) {
+        std::cout << "ttasim_cycles: " << simFront->cycleCount() << std::endl;
+    }
+
     delete cli;
     return EXIT_SUCCESS;
 }

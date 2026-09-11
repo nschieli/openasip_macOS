@@ -264,7 +264,15 @@ CompiledSimCodeGenerator::generateMakefile() {
             
         // use because ccache doesn't like changing directory paths
         // (in a preprocessor comment)
-        << "cppflags = " << CompiledSimCompiler::COMPILED_SIM_CPP_FLAGS << endl
+        // CONFIGURE_CPPFLAGS appended for the same reason as in
+        // CompiledSimCompiler::compileFile(): `includes` above is built from
+        // Environment::includeDirPaths(), which lists only OpenASIP's own
+        // directories, while the generated sources include OSAL.hh and so
+        // reach <xercesc/util/XMLString.hpp>. Without this the generated
+        // Makefile cannot compile CompiledSimulationEngine.hh.gch wherever
+        // xerces is not in a default include path (e.g. Homebrew).
+        << "cppflags = " << CompiledSimCompiler::COMPILED_SIM_CPP_FLAGS
+        << " " << CONFIGURE_CPPFLAGS << endl
         << endl
         
         << "all: CompiledSimulationEngine.so" << endl << endl
@@ -281,7 +289,14 @@ CompiledSimCodeGenerator::generateMakefile() {
         // compile and link phases separately to allow distributed compilation
         // thru distcc
         << "\t$(CC) -c $(cppflags) $(opt_flags) $(includes) $< -o $@.o" << endl
-        << "\t$(CC) $(soflags) $(opt_flags) -lgcc $@.o -o $@" << endl
+        // -lgcc is GCC's runtime support library. macOS has no libgcc at all
+        // (`ld: library 'gcc' not found`); clang links its own equivalent,
+        // compiler-rt builtins, automatically. Omit the flag there.
+        << "\t$(CC) $(soflags) $(opt_flags) "
+#ifndef __APPLE__
+        << "-lgcc "
+#endif
+        << "$@.o -o $@" << endl
         << "\t@rm -f $@.so.o" << endl
         << endl
             

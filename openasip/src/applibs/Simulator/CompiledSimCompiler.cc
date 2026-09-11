@@ -189,8 +189,15 @@ CompiledSimCompiler::compileFile(
             << path << endl;
     }
     
-    string command = compiler_ + " " + includes + COMPILED_SIM_CPP_FLAGS
-        + globalCompileFlags_ + " " + flags + " " 
+    // CONFIGURE_CPPFLAGS carries the THIRD-PARTY include paths found at
+    // configure time. Environment::includeDirPaths() above returns only
+    // OpenASIP's own directories, but the generated simulation sources pull in
+    // OSAL.hh -> ... -> Conversion.hh -> <xercesc/util/XMLString.hpp>. Where
+    // xerces lives in /usr/include this is a no-op; with Homebrew it is the
+    // difference between the compiled simulator working and not.
+    string command = compiler_ + " " + includes + " " + CONFIGURE_CPPFLAGS + " "
+        + COMPILED_SIM_CPP_FLAGS
+        + globalCompileFlags_ + " " + flags + " "
         + path + " -o " + directory + DS + fileNameBody + outputExtension;
     
     return system(command.c_str());

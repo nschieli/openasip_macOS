@@ -88,6 +88,8 @@ POP_CLANG_DIAGS
 #include "SimulationStatistics.hh"
 #include "RFAccessTracker.hh"
 #include "BusTracker.hh"
+#include "OperationNGramTracker.hh"
+#include "FunctionCyclesTracker.hh"
 #include "InstructionMemory.hh"
 #include "ExecutableInstruction.hh"
 #include "ProcedureTransferTracker.hh"
@@ -123,7 +125,8 @@ SimulatorFrontend::SimulatorFrontend(SimulationType backendType) :
     currentBackend_(backendType),
     disassembler_(NULL), executionTracing_(false),
     busTracing_(false), 
-    rfAccessTracing_(false), procedureTransferTracing_(false), 
+    rfAccessTracing_(false), procedureTransferTracing_(false),
+    operationNGramTracking_(false), functionCyclesTracking_(false),
     saveProfileData_(false), saveUtilizationData_(false),
     stopPointManager_(NULL), tpef_(NULL),
     fuResourceConflictDetection_(true),
@@ -1498,7 +1501,7 @@ SimulatorFrontend::initializeTracing() {
                             simCon_)->instructionMemory(core));
             }
             if (procedureTransferTracing_) {
-                procedureTransferTrackers_[core] = 
+                procedureTransferTrackers_[core] =
                     new ProcedureTransferTracker(*this, *traceDB);
             }
 
@@ -1538,6 +1541,35 @@ SimulatorFrontend::initializeTracing() {
             }
         }
     }
+
+    // Operation n-gram tracking is independent of any trace file: its data
+    // lives in the tracker itself and is dumped on demand via `info stats`.
+    // Reset any stale tracker from a prior run so counters start at zero.
+    SequenceTools::deleteAllItems(operationNGramTrackers_);
+    if (operationNGramTracking_) {
+        const int coreCount = 1;
+        operationNGramTrackers_.resize(coreCount, NULL);
+        for (int core = 0; core < coreCount; ++core) {
+            if (operationNGramTrackers_[core] == NULL) {
+                operationNGramTrackers_[core] =
+                    new OperationNGramTracker(*this);
+            }
+        }
+    }
+
+    // Function-level cycle attribution — same storage model (no trace file).
+    SequenceTools::deleteAllItems(functionCyclesTrackers_);
+    if (functionCyclesTracking_) {
+        const int coreCount = 1;
+        functionCyclesTrackers_.resize(coreCount, NULL);
+        for (int core = 0; core < coreCount; ++core) {
+            if (functionCyclesTrackers_[core] == NULL) {
+                functionCyclesTrackers_[core] =
+                    new FunctionCyclesTracker(*this);
+            }
+        }
+    }
+
     setupCallHistoryTracking();
 }
 
@@ -1701,6 +1733,8 @@ SimulatorFrontend::finishSimulation() {
     SequenceTools::deleteAllItems(busTrackers_);
     SequenceTools::deleteAllItems(rfAccessTrackers_);
     SequenceTools::deleteAllItems(procedureTransferTrackers_);
+    SequenceTools::deleteAllItems(operationNGramTrackers_);
+    SequenceTools::deleteAllItems(functionCyclesTrackers_);
     SequenceTools::deleteAllItems(utilizationStats_);
     SequenceTools::deleteAllItems(callPathTrackers_);
 }
@@ -1843,6 +1877,49 @@ SimulatorFrontend::procedureTransferTracing() const {
 }
 
 /**
+ * Returns true in case operation n-gram tracking is enabled.
+ */
+bool
+SimulatorFrontend::operationNGramTracking() const {
+    return operationNGramTracking_;
+}
+
+/**
+ * Returns the operation n-gram tracker for the given core, or NULL if
+ * tracking is not enabled (or the tracker has not been initialized yet,
+ * e.g. because no program has been loaded).
+ */
+const OperationNGramTracker*
+SimulatorFrontend::operationNGramTracker(int core) const {
+    if (core == -1) core = 0;
+    if (static_cast<std::size_t>(core) >= operationNGramTrackers_.size()) {
+        return NULL;
+    }
+    return operationNGramTrackers_[core];
+}
+
+/**
+ * Returns true in case function-level cycle attribution tracking is enabled.
+ */
+bool
+SimulatorFrontend::functionCyclesTracking() const {
+    return functionCyclesTracking_;
+}
+
+/**
+ * Returns the function-cycles tracker for the given core, or NULL if
+ * tracking is not enabled (or the tracker has not been initialized yet).
+ */
+const FunctionCyclesTracker*
+SimulatorFrontend::functionCyclesTracker(int core) const {
+    if (core == -1) core = 0;
+    if (static_cast<std::size_t>(core) >= functionCyclesTrackers_.size()) {
+        return NULL;
+    }
+    return functionCyclesTrackers_[core];
+}
+
+/**
  * Returns true in case profile data saving is enabled.
  *
  * @return True in case profile data saving is enabled.
@@ -1943,6 +2020,28 @@ SimulatorFrontend::setRFAccessTracing(bool value) {
 void
 SimulatorFrontend::setProcedureTransferTracing(bool value) {
     procedureTransferTracing_ = value;
+}
+
+/**
+ * Sets the operation n-gram tracking on or off.
+ *
+ * Takes effect at the next call to initializeTracing() (typically the next
+ * loadProgram / killSimulation), matching the behaviour of the other
+ * tracking-toggle setters.
+ */
+void
+SimulatorFrontend::setOperationNGramTracking(bool value) {
+    operationNGramTracking_ = value;
+}
+
+/**
+ * Sets function-level cycle attribution tracking on or off. Takes effect at
+ * the next initializeTracing() (typically the next loadProgram /
+ * killSimulation).
+ */
+void
+SimulatorFrontend::setFunctionCyclesTracking(bool value) {
+    functionCyclesTracking_ = value;
 }
 
 /**

@@ -115,6 +115,17 @@ ProDe::OnInit() {
 
     // create a document template for ADF files.
     docManager_ = new wxDocManager;
+
+#ifdef __WXOSX__
+    // On Darwin the canvas is hosted directly in the main frame rather than in
+    // a shown MDI child (see MDFView::OnCreate -- wxOSX has no real MDI), so
+    // the editor is genuinely single-window there. A second open document
+    // would add a second canvas to the same frame's sizer and stack them.
+    // Constrain the doc manager to match the window model: opening another ADF
+    // closes the current one, which is also the ordinary macOS behaviour for a
+    // single-window editor.
+    docManager_->SetMaxDocsOpen(1);
+#endif
     (void) new wxDocTemplate((wxDocManager*) docManager_,
 			     _T("Architecture Definition"),
                              _T("*.adf;*.xml;*.cfg"), _T(""),
