@@ -41,6 +41,7 @@
 #include "SimulatorFrontend.hh"
 #include "TTASimulationController.hh"
 #include "CompiledSimCodeGenerator.hh"
+#include "Application.hh"
 #include "Machine.hh"
 #include "FunctionUnit.hh"
 #include "FUPort.hh"
@@ -272,7 +273,7 @@ CompiledSimCodeGenerator::generateMakefile() {
         // Makefile cannot compile CompiledSimulationEngine.hh.gch wherever
         // xerces is not in a default include path (e.g. Homebrew).
         << "cppflags = " << CompiledSimCompiler::COMPILED_SIM_CPP_FLAGS
-        << " " << CONFIGURE_CPPFLAGS << endl
+        << " " << Application::relocatedPath(CONFIGURE_CPPFLAGS) << endl
         << endl
         
         << "all: CompiledSimulationEngine.so" << endl << endl

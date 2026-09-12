@@ -24,7 +24,8 @@ while [ -L "$_oa_self" ]; do
 done
 _oa_bindir=`cd "\`dirname "$_oa_self"\`" 2>/dev/null && pwd`
 
-prefix=@prefix@
+_oa_built_prefix=@prefix@
+prefix=$_oa_built_prefix
 case $_oa_bindir in
   */bin)
     _oa_root=`dirname "$_oa_bindir"`
@@ -33,6 +34,23 @@ case $_oa_bindir in
     fi
     ;;
 esac
+
+# Rebase the values configure recorded onto the prefix we just derived.
+#
+# The block above already relocates `prefix`; these two were left behind, and
+# they are the ones that MATTER: `oacc` asks this script where llvmtce-config
+# is, so on a relocated prefix it was handed the build machine's path and died
+# with "Unable to determine llvm include dir". Measured on both published CI
+# artifacts at 4fd03f76 -- oa-selftest 5 of 8.
+#
+# A no-op when the tree has not moved, so an in-place install is untouched.
+_oa_rebase() {
+  if test "x$prefix" = "x$_oa_built_prefix"; then
+    printf '%s' "$1"
+  else
+    printf '%s' "$1" | sed "s|$_oa_built_prefix|$prefix|g"
+  fi
+}
 exec_prefix=@exec_prefix@
 exec_prefix_set=no
 
@@ -63,9 +81,9 @@ dynamic_flag="@DYNAMIC_FLAG@"
 
 version_string="@VERSION_STRING@"
 
-llvm_ldflags="@LLVM_LDFLAGS@"
+llvm_ldflags=`_oa_rebase "@LLVM_LDFLAGS@"`
 
-llvm_config="@LLVM_CONFIG@"
+llvm_config=`_oa_rebase "@LLVM_CONFIG@"`
 
 usage()
 {

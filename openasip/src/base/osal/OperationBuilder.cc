@@ -147,9 +147,9 @@ OperationBuilder::buildObject(
     if (behaviorFile != "") {
         TCEString CPPFLAGS = Environment::environmentVariable("CPPFLAGS");
         TCEString CXXFLAGS = Environment::environmentVariable("CXXFLAGS")
-            + " " + CONFIGURE_CPPFLAGS + " ";
+            + " " + Application::relocatedPath(CONFIGURE_CPPFLAGS) + " ";
         TCEString LDFLAGS = Environment::environmentVariable("LDFLAGS")
-            + " " + CONFIGURE_LDFLAGS + " ";
+            + " " + Application::relocatedPath(CONFIGURE_LDFLAGS) + " ";
         TCEString CXXCOMPILER = Environment::environmentVariable("CXX");
         vector<string> includes = Environment::includeDirPaths();
 
@@ -185,7 +185,8 @@ OperationBuilder::buildObject(
         // might point to paths with incompatible TCE headers.
         string COMPILE_FLAGS = \
             INCLUDES + " " + 
-            CONFIGURE_CPPFLAGS + " " + CONFIGURE_LDFLAGS + " " +
+            Application::relocatedPath(CONFIGURE_CPPFLAGS) + " " +
+            Application::relocatedPath(CONFIGURE_LDFLAGS) + " " +
             CXXFLAGS + " " + CPPFLAGS + " ";
 
         string module = path + FileSystem::DIRECTORY_SEPARATOR +

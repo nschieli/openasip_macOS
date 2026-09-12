@@ -64,6 +64,18 @@ IGNORE_COMPILER_WARNING("-Wcomment")
 #include <llvm/Support/Debug.h>
 #include <llvm/CodeGen/RegAllocRegistry.h>
 #include "Application.hh"
+
+/**
+ * The llvm-config to invoke, corrected for a relocated install.
+ *
+ * ⛔ configure records an ABSOLUTE path (tce_config.h LLVM_CONFIG) and it is
+ *    compiled into this library, so a published prefix unpacked anywhere else
+ *    shells out to a path that does not exist: both CI artifacts at 4fd03f76
+ *    fail oa-selftest 5/8 on exactly this. A no-op for an in-place install.
+ */
+static std::string llvmConfigCmd() {
+    return Application::relocatedPath(LLVM_CONFIG);
+}
 #include <llvm/IR/Module.h>
 #include <llvm/IR/LLVMContext.h>
 
@@ -879,7 +891,7 @@ LLVMBackend::createPlugin() {
             " -I" + std::string(TCE_SRC_ROOT) + DS + "src" + DS +
             "applibs" + DS + "Scheduler" + DS + "Algorithms" + " " +
 
-            " -I`" LLVM_CONFIG " --includedir`" + DS + "llvm" + DS +
+            " -I`" + llvmConfigCmd() + " --includedir`" + DS + "llvm" + DS +
             "Target" + DS;
 
     }
@@ -931,9 +943,10 @@ LLVMBackend::createPlugin() {
         // executing llvm-config in the commandline. This doesn't
         // work if llvm-config is not found in path.
         // First check that llvm-config is found in path.
-        if (system(LLVM_CONFIG " --version")) {
+        const std::string llvmConfig = llvmConfigCmd();
+        if (system((llvmConfig + " --version").c_str())) {
             std::string msg = "Unable to determine llvm include dir. "
-                LLVM_CONFIG " not found in path";
+                + llvmConfig + " not found in path";
 
             throw CompileError(__FILE__, __LINE__, __func__, msg);
         }
@@ -942,17 +955,17 @@ LLVMBackend::createPlugin() {
         tblgenCmd = tblgenbin + " " + TBLGEN_INCLUDES +
             pluginIncludeFlags +
             " -I" + tempDir_ +
-            " -I`" LLVM_CONFIG " --includedir`" +
-            " -I`" LLVM_CONFIG " --includedir`/Target" +
-            " -I`" LLVM_CONFIG " --includedir`/llvm/Target" +
+            " -I`" + llvmConfig + " --includedir`" +
+            " -I`" + llvmConfig + " --includedir`/Target" +
+            " -I`" + llvmConfig + " --includedir`/llvm/Target" +
             " -I/usr/include ";
     } else {
         tblgenCmd = tblgenbin + " " + TBLGEN_INCLUDES +
             pluginIncludeFlags +
             " -I" + tempDir_ + 
-            " -I" + LLVM_INCLUDE_DIR +
-            " -I" + LLVM_INCLUDE_DIR + "/Target" +
-            " -I" + LLVM_INCLUDE_DIR + "/llvm/Target"; 
+            " -I" + Application::relocatedPath(LLVM_INCLUDE_DIR) +
+            " -I" + Application::relocatedPath(LLVM_INCLUDE_DIR) + "/Target" +
+            " -I" + Application::relocatedPath(LLVM_INCLUDE_DIR) + "/llvm/Target"; 
     }
 
     tblgenCmd += " " + tempDir_ + FileSystem::DIRECTORY_SEPARATOR + "TCE.td";
@@ -1069,7 +1082,7 @@ LLVMBackend::createPlugin() {
         " -I" + tempDir_ +
         pluginIncludeFlags +
         " " + SHARED_CXX_FLAGS +
-        " " + LLVM_CPPFLAGS +
+        " " + Application::relocatedPath(LLVM_CPPFLAGS) +
         // CONFIGURE_CPPFLAGS carries the include paths of the THIRD-PARTY
         // libraries found at configure time. The plugin sources pull in
         // Conversion.hh, which includes <xercesc/util/XMLString.hpp>, so those
@@ -1077,10 +1090,10 @@ LLVMBackend::createPlugin() {
         // /usr/include this is a no-op, which is why the omission went
         // unnoticed; with Homebrew (/opt/homebrew/include) the plugin build
         // fails at RUN time with "xercesc/util/XMLString.hpp file not found".
-        " " + CONFIGURE_CPPFLAGS;
+        " " + Application::relocatedPath(CONFIGURE_CPPFLAGS);
 
     if (useInstalledVersion_)
-        cmd += " -I`" LLVM_CONFIG " --includedir`";
+        cmd += " -I`" + llvmConfigCmd() + " --includedir`";
 
     cmd +=
         #ifdef LLVM_OLDER_THAN_16

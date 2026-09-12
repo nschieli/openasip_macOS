@@ -606,3 +606,53 @@ Application::installationDir() {
 
     return string(TCE_INSTALLATION_ROOT);
 }
+
+/**
+ * Rewrite a configure-time path into the tree this library actually lives in.
+ *
+ * ⛔ THE DEFECT THIS CLOSES, MEASURED ON A PUBLISHED ARTIFACT. configure bakes
+ * its own --prefix into tce_config.h, so a RELOCATED install still looks for
+ * llvmtce-config where it was built. Both CI prefixes (Linux run 34707741187,
+ * macOS run 34707741044, commit 4fd03f76) fail `oa-selftest` 5 of 8 on exactly
+ * that: oacc dies with
+ *
+ *     sh: <build-prefix>/bin/llvmtce-config: not found
+ *     Unable to determine llvm include dir.
+ *
+ * and the string is compiled INTO the library (122 occurrences on Linux, 67 on
+ * macOS), so no amount of rewriting the installed scripts fixes it.
+ *
+ * installationDir() already derives the real prefix from where libopenasip is,
+ * via dladdr; this reuses that answer for the paths configure recorded, rather
+ * than adding a second mechanism.
+ *
+ * ⚠ A NO-OP WHEN THE TREE HAS NOT MOVED -- built prefix == runtime prefix, so
+ * an in-place install produces byte-identical commands to before. That is what
+ * makes this safe to apply at every use site.
+ *
+ * ⚠ Substring replacement, deliberately: the values are not bare paths but
+ * whole flag strings ("-I<prefix>/include -D_GNU_SOURCE ...", and LDFLAGS
+ * carrying several -L and -Wl,-rpath entries), so each may contain the prefix
+ * more than once and in the middle of a word.
+ *
+ * @param configureTimePath a path or flag string recorded by configure.
+ * @return the same string with the build prefix replaced by the real one.
+ */
+string
+Application::relocatedPath(const std::string& configureTimePath) {
+    const string built = string(TCE_INSTALLATION_ROOT);
+    if (built == "" || configureTimePath == "") {
+        return configureTimePath;
+    }
+    const string actual = installationDir();
+    if (actual == "" || actual == built) {
+        return configureTimePath;
+    }
+    string result = configureTimePath;
+    string::size_type at = 0;
+    while ((at = result.find(built, at)) != string::npos) {
+        result.replace(at, built.length(), actual);
+        at += actual.length();
+    }
+    return result;
+}

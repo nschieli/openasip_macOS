@@ -194,6 +194,22 @@ public:
     static bool isInstalled();
     static std::string installationDir();
 
+    /**
+     * Rewrite a configure-time path so it points into the tree this library
+     * actually lives in.
+     *
+     * ⛔ WHY: `configure` bakes its own --prefix into tce_config.h -- LLVM_CONFIG,
+     * LLVM_INCLUDE_DIR, LLVM_CPPFLAGS, LLVM_LDFLAGS, CONFIGURE_LDFLAGS. A
+     * RELOCATED install (a release tarball, a CI artifact, a Homebrew bottle)
+     * therefore looks for llvmtce-config where it was BUILT, and compilation
+     * dies with "Unable to determine llvm include dir". installationDir()
+     * already solves this for data files, via dladdr; this applies the same
+     * answer to the paths configure recorded.
+     *
+     * A no-op when the tree has not moved, so an in-place install is unaffected.
+     */
+    static std::string relocatedPath(const std::string& configureTimePath);
+
     /// ---------------------
 
     /**
