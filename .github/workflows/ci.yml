@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    # ⭐ A TAG BUILDS AND PUBLISHES. Verdon consumes the Linux prefix the same
+    #    way Homebrew consumes the macOS one, and a package needs a URL that
+    #    outlives the run: a workflow artifact expires in 30 days.
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - main
@@ -13,6 +18,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+
+    # Only the release step needs this; scoped at the job because that is the
+    # smallest unit GitHub allows.
+    permissions:
+      contents: write
 
     env:
       LLVM_VERSION: 22
@@ -165,6 +175,219 @@ jobs:
       - name: System tests
         run: |
           python3 openasip/tools/scripts/systemtest.py -os -p$(nproc)
+
+      # ════════════════════════════════════════════════════════════════════
+      # Packaging for downstream (Verdon), mirroring ci-macos.yml.
+      #
+      # ⭐ AFTER the selftest, unit tests and systemtest, DELIBERATELY. An
+      #    artifact survives a failed job, so packaging earlier would publish a
+      #    binary nothing vouched for.
+      # ⚠ LGPL v2.1 obliges us to make the corresponding source available
+      #   alongside a distributed binary. It is this repository at the commit
+      #   named in BUILD-INFO, which is why that file is written rather than
+      #   assumed.
+      # ════════════════════════════════════════════════════════════════════
+
+      # ⛔ WHY AN env.sh AND NOT AN RPATH, AND IT IS A REAL DIFFERENCE FROM
+      #    macOS. There, configure.ac rewrites libtool to emit @rpath plus
+      #    -Wl,-rpath,@loader_path/../lib, so a moved tree runs with no
+      #    environment at all. On Linux libopenasip.so records NO RUNPATH
+      #    (measured: `objdump -x lib/libopenasip.so` shows none), so the
+      #    library is found only via LD_LIBRARY_PATH.
+      # ⇒ Shipping the env.sh INSIDE the prefix makes the archive
+      #   self-describing without touching configure.ac: it resolves paths from
+      #   its own location, so it is correct wherever the archive is unpacked.
+      # ⚠ The alternative -- adding -Wl,-rpath,'$ORIGIN/../lib' -- would remove
+      #   the need for it entirely and is the better long-term fix. It changes
+      #   every Linux link line, so it is a separate decision, not a side effect
+      #   of packaging.
+      - name: Ship a relocatable env.sh inside the prefix
+        run: |
+          cat > ${{ github.workspace }}/local/env.sh <<'ENVSH'
+          # OpenASIP + the patched LLVM it requires, from wherever this archive
+          # was unpacked. Source it; do not edit paths into it.
+          HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export PATH="$HERE/bin:$PATH"
+          export LD_LIBRARY_PATH="$HERE/lib:${LD_LIBRARY_PATH:-}"
+          export LDFLAGS="-L$HERE/lib"
+          ENVSH
+          cat ${{ github.workspace }}/local/env.sh
+
+      # ⛔ BEFORE PACKAGING. This check exists to keep a non-relocatable tree off
+      #    the download page; run after `Upload` it would only record that we
+      #    shipped one.
+      # ⚠ AND IT CANNOT BE CAUGHT ON A DEVELOPER BOX: installationDir() falls
+      #   back to the compiled-in prefix, and on a machine that has ever
+      #   installed there, THAT tree's data files satisfy the load -- so the test
+      #   passes locally for a reason unrelated to the relocated tree.
+      - name: Relocatable — move the tree and run from it
+        run: |
+          set -euo pipefail
+          fail=0
+          SRC=${{ github.workspace }}/local
+          DST=${{ github.workspace }}/relocated
+          mv "$SRC" "$DST"
+
+          # 1. ⭐ A CLEAN ENVIRONMENT PLUS THE SHIPPED env.sh MUST SUFFICE.
+          #    `env -i` so no PATH or LD_LIBRARY_PATH from the runner can mask a
+          #    library that would be missing for a customer.
+          # ⛔ TEST THE OUTPUT, NOT THE EXIT CODE. `generateprocessor --version`
+          #    exits 1 while printing the right banner, so an exit-code check
+          #    calls a working binary broken. The binary must print its OWN
+          #    NAME, which it can only do after its library loaded.
+          for b in ttasim generateprocessor; do
+            out=$(cd / && env -i HOME="$HOME" bash -c ". $DST/env.sh; $b --version" 2>&1 || true)
+            case "$out" in
+              *"error while loading shared libraries"*)
+                echo "::error::$b could not load its library from the relocated tree: $out"; fail=1 ;;
+              *"$b"*)
+                echo "  $b: $(echo "$out" | head -1)" ;;
+              *)
+                echo "::error::$b did not identify itself; got: $out"; fail=1 ;;
+            esac
+          done
+
+          # 2. ⭐ THE NEGATIVE CONTROL, so the check above cannot pass vacuously.
+          #    WITHOUT the env.sh the same binary must FAIL -- if it succeeds,
+          #    something on the runner is providing the library and step 1 proved
+          #    nothing about a customer's machine.
+          out=$(cd / && env -i HOME="$HOME" bash -c "$DST/bin/ttasim --version" 2>&1 || true)
+          case "$out" in
+            *"error while loading shared libraries"*)
+              echo "  control: without env.sh ttasim fails as expected" ;;
+            *)
+              echo "::error::ttasim ran WITHOUT the shipped env.sh -- the relocation check is not measuring what it claims: $out"; fail=1 ;;
+          esac
+
+          # 3. the prefix oracle must report where it now IS, not where it was
+          #    built -- that is what tells every tool where its data files live.
+          got=$(cd / && env -i HOME="$HOME" bash -c ". $DST/env.sh; openasip-config --prefix")
+          [ "$got" = "$DST" ] || { echo "::error::openasip-config says '$got', expected '$DST'"; fail=1; }
+
+          # 4. and a real data-path load, not just a version string.
+          # ⛔⛔ TEST THE OUTPUT. ttasim EXITS 0 WHILE FAILING TO LOAD A MACHINE,
+          #    so an exit-code check here prints a green directly beneath the
+          #    failure it was meant to catch.
+          # ⛔ A CLEAN LOAD PRINTS NOTHING, so this check is necessarily
+          #    absence-of-error -- there is no `info` subcommand that reports a
+          #    machine fact without a running simulation (measured: `info proc`
+          #    says "No simulation running", `info machine`/`info buses` are
+          #    unknown, `info regfiles`/`info funits` print nothing even on a
+          #    good load). Two consequences, both handled below.
+          adf=$(find "$DST/share" -name 'minimal*.adf' | head -1)
+          out=$(cd / && env -i HOME="$HOME" bash -c ". $DST/env.sh; ttasim -e 'mach $adf; quit' < /dev/null" 2>&1 || true)
+          case "$out" in
+            # ⛔ (1) A DEAD BINARY MUST NOT PASS THIS CHECK. Without this arm the
+            #    loader error falls through to `*)` and prints "ttasim loaded ..."
+            #    over a ttasim that never started -- MEASURED while controlling
+            #    this step by deleting libLLVMTCE.so: check 1 went red and this
+            #    one still reported success. The macOS version has the same hole.
+            *"error while loading shared libraries"*)
+              echo "::error::ttasim did not even start, so this check proves nothing about data files: $out"; fail=1 ;;
+            *"Unable to load machine"*|*"No schema file set"*|*"Illegal machine file"*)
+              echo "::error::ttasim cannot load an ADF from the relocated tree -- it resolves its DATA files through the compiled-in prefix, not its own location."
+              echo "::error::$out"
+              fail=1 ;;
+            *) echo "  ttasim loaded $(basename "$adf") from the relocated tree" ;;
+          esac
+
+          # ⭐ (2) AND THE PERTURBATION THAT MAKES THE ABOVE MEAN SOMETHING: a
+          #    nonexistent ADF must be REJECTED. If it is not, the check is
+          #    reading silence as success and would pass on a tree whose data
+          #    files were unreachable.
+          bad=$(cd / && env -i HOME="$HOME" bash -c ". $DST/env.sh; ttasim -e 'mach /nonexistent.adf; quit' < /dev/null" 2>&1 || true)
+          case "$bad" in
+            *"Unable to load machine"*) echo "  control: a nonexistent ADF is rejected, so the check above can fail" ;;
+            *) echo "::error::a nonexistent ADF was NOT rejected -- the data-load check cannot fail and is not a control: $bad"; fail=1 ;;
+          esac
+
+          mv "$DST" "$SRC"
+          [ "$fail" -eq 0 ] && echo "the installed tree is relocatable: linkage AND data files"
+          exit $fail
+
+      - name: Record what was built
+        run: |
+          cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF
+          repository : ${{ github.repository }}
+          commit     : ${{ github.sha }}
+          ref        : ${{ github.ref_name }}
+          run        : ${{ github.run_id }}
+          built      : $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner     : $(. /etc/os-release && echo "$PRETTY_NAME") $(uname -m)
+          llvm       : ${LLVM_VERSION}
+
+          Licensed LGPL v2.1. Corresponding source is the repository and commit
+          above: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+          EOF
+          cat ${{ github.workspace }}/local/BUILD-INFO
+
+      - name: Package the prefix
+        run: |
+          cd ${{ github.workspace }}
+          tar -czf openasip-linux-x86_64.tar.gz local
+          ls -lh openasip-linux-x86_64.tar.gz
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: openasip-linux-x86_64
+          path: openasip-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Checksum
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cd ${{ github.workspace }}
+          sha256sum openasip-linux-x86_64.tar.gz > openasip-linux-x86_64.tar.gz.sha256
+          cat openasip-linux-x86_64.tar.gz.sha256
+
+      # ⛔ create-OR-upload, AND THAT IS NOT DEFENSIVENESS. ci-macos.yml
+      #    publishes to the SAME tag. Whichever job reaches the tag second finds
+      #    the release already there and `gh release create` fails, so a plain
+      #    create would make enabling Linux releases break macOS publishing (or
+      #    the reverse, depending on which finished first).
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd ${{ github.workspace }}
+          cat > NOTES-linux.md <<'EOF'
+          OpenASIP toolchain for Linux x86_64, built and self-tested by CI from a
+          clean checkout on Ubuntu 24.04 LTS (stock).
+
+          The archive expands to a `local/` prefix containing OpenASIP and the
+          patched LLVM it requires. `local/BUILD-INFO` records the commit, the
+          run and the runner.
+
+          Put it on PATH by sourcing the env.sh inside it, which resolves paths
+          from its own location:
+
+              tar -xzf openasip-linux-x86_64.tar.gz
+              . local/env.sh
+
+          Licensed LGPL v2.1. The corresponding source is this repository at the
+          commit named in BUILD-INFO.
+
+          Verify:
+
+              sha256sum -c openasip-linux-x86_64.tar.gz.sha256
+          EOF
+          ASSETS="openasip-linux-x86_64.tar.gz openasip-linux-x86_64.tar.gz.sha256"
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "OpenASIP ${GITHUB_REF_NAME}" \
+            --notes-file NOTES-linux.md \
+            $ASSETS \
+          || gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber $ASSETS
+
+      - name: What this job did and did not cover
+        if: always()
+        run: |
+          echo "Covered : configure, build, install, oa-selftest, unit tests, systemtest.py, QEMU-OpenASIP (non-blocking), relocatability, and packaging on Ubuntu 24.04 x86_64 from a clean checkout."
+          echo "NOT here: macOS/arm64 — see ci-macos.yml."
+          echo "NOT here: the Verdon RTL swap. This artifact is the FORK's toolchain; verdon's own RTL is overlaid downstream by tools/build-product.sh."
 
       - name: Dump error logs
         if: failure()
