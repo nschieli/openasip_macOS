@@ -301,8 +301,35 @@ jobs:
             *) echo "::error::a nonexistent ADF was NOT rejected -- the data-load check cannot fail and is not a control: $bad"; fail=1 ;;
           esac
 
+          # 5. ⛔⛔ AND IT MUST BE ABLE TO COMPILE A PROGRAM. Checks 1-4 prove
+          #    linkage and data files only, and a prefix that passed all four
+          #    still could not build anything: oacc died on
+          #    `<build-path>/bin/llvmtce-config: not found` -- the path was
+          #    baked into libopenasip itself, which shells out to it. That is
+          #    how a published prefix reached a user broken while this step
+          #    said "relocatable".
+          # ⚠ VALIDATED IN BOTH DIRECTIONS on downloaded artifacts: it passes on
+          #    the fixed tree and fires on the broken one with exactly that
+          #    message.
+          # ⚠ ONLY WITH A COLD PLUGIN CACHE (~/.cache/openasip/tcecc, which is
+          #    SHARED ACROSS PREFIXES): a warm one lets a broken prefix compile
+          #    and this check passes silently. A fresh runner is cold; clear it
+          #    if you reproduce this by hand.
+          # ⚠ the oracle is "the output file exists", so remove it first --
+          #   a stale one would pass for a compile that never ran.
+          rm -f "$RUNNER_TEMP/reloc.tpef"
+          echo 'int main(void) { return 0; }' > "$RUNNER_TEMP/reloc.c"
+          out=$(cd "$RUNNER_TEMP" && env -i HOME="$HOME" PATH=/usr/bin:/bin bash -c \
+            ". $DST/env.sh; oacc -O0 -a $DST/share/openasip/data/mach/minimal.adf \
+               -o reloc.tpef reloc.c" 2>&1 || true)
+          if [ -s "$RUNNER_TEMP/reloc.tpef" ]; then
+            echo "  oacc compiled a program from the relocated tree"
+          else
+            echo "::error::oacc cannot compile from the relocated tree: $out"; fail=1
+          fi
+
           mv "$DST" "$SRC"
-          [ "$fail" -eq 0 ] && echo "the installed tree is relocatable: linkage AND data files"
+          [ "$fail" -eq 0 ] && echo "the installed tree is relocatable: linkage, data files AND compilation"
           exit $fail
 
       - name: Record what was built
