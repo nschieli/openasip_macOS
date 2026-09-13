@@ -378,7 +378,31 @@ ProGeUI::generateProcessor(
                 errorStream, warningStream, verboseStream);
         }
     } catch (Exception& e) {
-        std::cerr << e.errorMessage() << std::endl;
+        // ⛔ RETHROW. This used to print and swallow, and every caller of this
+        //    function is written expecting it to throw: GenerateProcessor and
+        //    GenerateCoprocessor catch Exception and `return false` (so the
+        //    tool exits non-zero); GenerateProcessorDialog catches it and shows
+        //    an ErrorDialog. Swallowing defeated all three.
+        //
+        //    What the user saw instead, for an ordinary mistake — an IDF naming
+        //    an HDB that does not exist, or an `fu-id` the database no longer
+        //    has:
+        //
+        //      generateprocessor <...>          prints the error, EXITS 0,
+        //                                       writes no output directory
+        //      generateprocessor -t <...>       SIGSEGV, because generateTestBench()
+        //                                       then copies a processor block that
+        //                                       was never built (null `this` in
+        //                                       BaseNetlistBlock::shallowCopy)
+        //
+        //    Both faces are the same defect: generation failed and nothing
+        //    upstream was told.
+        //
+        // ⚠ The local print goes with it. Every caller renders the exception --
+        //   the CLI prints the message and where it was thrown, ProDe opens an
+        //   ErrorDialog -- so keeping it here only printed the same sentence
+        //   twice more on the way out.
+        throw;
     }
 }
 
@@ -398,6 +422,19 @@ ProGeUI::generateTestBench(
 
     checkIfNull(machine_, "ADF not loaded");
     checkIfNull(idf_, "IDF not loaded");
+    // ⛔ AND THE PROCESSOR ITSELF, which the two lines above do not cover: a
+    //    testbench wraps the generated core, and if generation did not run
+    //    there is nothing to wrap. Without this the failure is a SIGSEGV inside
+    //    BaseNetlistBlock::shallowCopy with a null `this`, three frames deep,
+    //    rather than a sentence. Defensive on purpose: the rethrow above closes
+    //    the path that was reaching here, and a crash is a bad way to learn
+    //    that some other path still can.
+    if (!generator_.hasProcessorTopLevel()) {
+        throw InvalidData(
+            __FILE__, __LINE__, __func__,
+            "Processor has not been generated, so there is nothing to "
+            "generate a test bench for.");
+    }
 
     try {
         TestBenchBlock coreTestbench(

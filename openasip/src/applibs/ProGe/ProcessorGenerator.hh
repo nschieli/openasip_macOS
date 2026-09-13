@@ -88,6 +88,16 @@ namespace ProGe {
         iMemWidth(const TTAMachine::Machine& mach, int imemWidthInMAUs);
 
         const NetlistBlock& processorTopLevel() const;
+        /**
+         * Whether a processor has been generated, i.e. whether
+         * processorTopLevel() has anything to return.
+         *
+         * processorTopLevel() dereferences the pointer unconditionally, so a
+         * caller that asks before generateProcessor() has succeeded gets a
+         * reference bound to NULL and crashes at its first use -- which is
+         * exactly what generateTestBench() did.
+         */
+        bool hasProcessorTopLevel() const;
         const ProGeContext& generatorContext() const;
 
         TCEString entityName() const;

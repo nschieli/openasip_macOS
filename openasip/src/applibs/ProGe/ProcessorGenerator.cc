@@ -521,6 +521,14 @@ ProcessorGenerator::processorTopLevel() const {
 }
 
 /**
+ * Returns true if a processor has been generated.
+ */
+bool
+ProcessorGenerator::hasProcessorTopLevel() const {
+    return coreTopBlock_ != NULL;
+}
+
+/**
  * Returns the context (adf, idf, entity name, etc.) that is used in the
  * processor generation.
  */
