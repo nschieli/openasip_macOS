@@ -287,7 +287,17 @@ jobs:
                 *) printf '%s\t%s\n' "${f#$PREFIX/}" "$dep" >> /tmp/oa-external.txt ;;
               esac
             done
-          done < <(find "$PREFIX/bin" "$PREFIX/lib" -type f 2>/dev/null)
+            # ⛔⛔ THE WHOLE PREFIX, NOT JUST bin/ AND lib/. Scanning those two
+            #    UNDER-REPORTED BY 29 FILES: the OSAL opsets and IC-decoder
+            #    plugins live in share/openasip/**.so (base.28.so, double.28.so,
+            #    DefaultICDecoderPlugin.28.so …) and every one of them links
+            #    xerces. They are dlopen'd AT RUNTIME, so a missing dependency
+            #    there does not fail at launch — it fails in the middle of a
+            #    build, which is the worst place to find out.
+            # ⚠ Measured on a real Mac 2026-09-16: xerces reach is 56 files, not
+            #   the 27 this step first reported. 162 Mach-O files in the whole
+            #   prefix, so scanning all of it costs nothing.
+          done < <(find "$PREFIX" -type f 2>/dev/null)
 
           echo "=== external references (outside the prefix, /usr/lib, /System) ==="
           if [ -s /tmp/oa-external.txt ]; then
@@ -339,7 +349,16 @@ jobs:
           tar -czf openasip-macos-arm64.tar.gz local
           ls -lh openasip-macos-arm64.tar.gz
 
+      # ⛔ ALWAYS UPLOAD, EVEN ON FAILURE. The self-containment check above runs
+      #    BEFORE this step, so a failing check meant `gh run download` reported
+      #    "no valid artifacts found" and the artifact could not be examined at
+      #    all — the check blocked the very diagnosis it exists to prompt.
+      #    Measured: runs 35089310495 and 35097904964 produced nothing.
+      # ⚠ This is upload-for-diagnosis ONLY. The release publish step further
+      #   down stays conditional: a prefix that fails its checks must never
+      #   reach a release page.
       - name: Upload
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: openasip-macos-arm64
