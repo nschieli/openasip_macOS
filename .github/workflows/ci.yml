@@ -332,6 +332,67 @@ jobs:
           [ "$fail" -eq 0 ] && echo "the installed tree is relocatable: linkage, data files AND compilation"
           exit $fail
 
+      # ── Self-containment ────────────────────────────────────────────────────
+      # ⛔ THE ASSET IS NAMED FOR A DISTRO, SO THE DISTRO CLAIM HAS TO BE
+      #    MEASURED. A prefix built here links against the runner's glibc and
+      #    libstdc++, and the SYMBOL VERSIONS it requires — not the file names —
+      #    are what decide whether it runs on another machine. `ldd` resolves
+      #    against THIS box, where everything exists, so it can only ever say
+      #    yes; the version floor is the honest number.
+      # ⚠ The inventory prints whether or not the check fails. The question
+      #   "which Linux can run this" gets asked every time someone consumes the
+      #   artifact, and it should be answerable from the build log.
+      - name: Self-contained — what the Linux prefix demands of its host
+        run: |
+          set -uo pipefail
+          PREFIX="${{ github.workspace }}/local"
+          fail=0
+
+          echo "=== libraries resolved OUTSIDE the prefix and the system paths ==="
+          : > /tmp/oa-external.txt
+          while IFS= read -r f; do
+            head -c 4 "$f" 2>/dev/null | grep -q $'\x7fELF' || continue
+            # ⚠ `next` MATTERS. A "libfoo.so => not found" line matches BOTH
+            #   rules, so without it every missing library is also reported as a
+            #   bogus dependency literally named "not".
+            ldd "$f" 2>/dev/null | awk '/not found/ {print "NOTFOUND:" $1; next} /=>/ {print $3}' \
+              | while IFS= read -r dep; do
+                  case "$dep" in
+                    NOTFOUND:*) printf '%s\t%s\n' "${f#$PREFIX/}" "$dep" >> /tmp/oa-external.txt ;;
+                    /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*) ;;
+                    "$PREFIX"/*) ;;
+                    ''|'('*) ;;
+                    *) printf '%s\t%s\n' "${f#$PREFIX/}" "$dep" >> /tmp/oa-external.txt ;;
+                  esac
+                done
+          done < <(find "$PREFIX/bin" "$PREFIX/lib" -maxdepth 1 -type f 2>/dev/null)
+
+          if [ -s /tmp/oa-external.txt ]; then
+            awk -F'\t' '{print $2}' /tmp/oa-external.txt | sort | uniq -c | sort -rn
+            head -30 /tmp/oa-external.txt
+            fail=1
+          else
+            echo "(none — every dependency is in the prefix or a system path)"
+          fi
+
+          # ⭐ THE NUMBER THAT DECIDES WHICH DISTRO CAN RUN THIS. A binary
+          #    requiring GLIBC_2.39 will not start on anything older, however
+          #    "linux-x86_64" the file name sounds.
+          echo "=== highest symbol versions required ==="
+          for lib in GLIBC GLIBCXX CXXABI; do
+            top=$(find "$PREFIX/bin" "$PREFIX/lib" -maxdepth 1 -type f -exec \
+                    objdump -T {} + 2>/dev/null \
+                  | grep -o "${lib}_[0-9][0-9.]*" | sort -u -V | tail -1)
+            echo "  ${lib}: ${top:-<none>}"
+          done
+          echo "  host: $(ldd --version | head -1)"
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::the prefix needs libraries from outside itself and the "\
+                 "system paths — it will not run where those are absent"
+          fi
+          exit $fail
+
       - name: Record what was built
         run: |
           cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF

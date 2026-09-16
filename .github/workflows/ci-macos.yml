@@ -248,6 +248,76 @@ jobs:
       #   alongside a distributed binary. It is this repository, at the commit
       #   named in BUILD-INFO below, which is why that file is written here
       #   rather than assumed.
+      # ── Self-containment ────────────────────────────────────────────────────
+      # ⛔⛔ RELOCATABILITY AND SELF-CONTAINMENT ARE DIFFERENT CLAIMS, AND THE
+      #    STEP ABOVE ONLY PROVES THE FIRST. It checks `otool -D` — libopenasip's
+      #    own install name — and runs the moved tree ON THE BUILD MACHINE. Every
+      #    Homebrew dylib this build links against is still sitting at
+      #    /opt/homebrew there, so the dependency is satisfied invisibly and the
+      #    relocation test passes on a tarball a user cannot run.
+      # ⇒ `otool -L` is the missing half: not "where does this library say it
+      #   is", but "what does it need, and will that exist on the machine that
+      #   downloads it".
+      # ⚠ WE CONFIGURE AGAINST HOMEBREW ON PURPOSE (--with-boost=/opt/homebrew,
+      #   --with-xerces=/opt/homebrew), so a reference into /opt/homebrew is the
+      #   EXPECTED result of the current build, not a surprise. This step exists
+      #   to make that dependency VISIBLE and to stop it changing silently.
+      # ⚠ The inventory prints whether or not the check fails: the point is to
+      #   know what we ship, and a green that printed nothing would teach us
+      #   nothing the next time this question is asked.
+      - name: Self-contained — what every shipped Mach-O actually needs
+        run: |
+          set -uo pipefail
+          PREFIX="${{ github.workspace }}/local"
+          fail=0
+          : > /tmp/oa-external.txt
+
+          # bin/ and lib/ are what ships and what a user invokes. Walking the
+          # whole prefix would drag in LLVM's thousands of files for no signal.
+          while IFS= read -r f; do
+            out=$(otool -L "$f" 2>/dev/null) || continue
+            case "$out" in *"is not an object file"*) continue ;; esac
+            # Skip the leading "<file>:" line; take the dependency paths.
+            printf '%s\n' "$out" | tail -n +2 | awk '{print $1}' | while IFS= read -r dep; do
+              case "$dep" in
+                @rpath/*|@loader_path/*|@executable_path/*) ;;
+                /usr/lib/*|/System/*) ;;
+                "$PREFIX"/*) ;;
+                '') ;;
+                *) printf '%s\t%s\n' "${f#$PREFIX/}" "$dep" >> /tmp/oa-external.txt ;;
+              esac
+            done
+          done < <(find "$PREFIX/bin" "$PREFIX/lib" -type f 2>/dev/null)
+
+          echo "=== external references (outside the prefix, /usr/lib, /System) ==="
+          if [ -s /tmp/oa-external.txt ]; then
+            echo "--- distinct libraries ---"
+            awk -F'\t' '{print $2}' /tmp/oa-external.txt | sort -u
+            echo "--- count by library ---"
+            awk -F'\t' '{print $2}' /tmp/oa-external.txt | sort | uniq -c | sort -rn
+            echo "--- first 40 (file -> dependency) ---"
+            head -40 /tmp/oa-external.txt
+            fail=1
+          else
+            echo "(none — the prefix is self-contained)"
+          fi
+
+          # ⭐ THE FLOOR, STATED. Without MACOSX_DEPLOYMENT_TARGET the minimum
+          #    macOS is whatever the runner image defaulted to — an accident of
+          #    the image, not a decision, and it is the number that decides who
+          #    can run the published asset.
+          echo "=== minimum macOS this build demands ==="
+          otool -l "$PREFIX/bin/ttasim" 2>/dev/null \
+            | awk '/LC_BUILD_VERSION/,/sdk/' | grep -E "minos|sdk" | head -4 \
+            || echo "(LC_BUILD_VERSION not readable)"
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::shipped Mach-O files reference libraries outside the prefix "\
+                 "— this tarball is NOT self-contained and will fail on a machine "\
+                 "without them (see the inventory above)"
+          fi
+          exit $fail
+
       - name: Record what was built
         run: |
           cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF
