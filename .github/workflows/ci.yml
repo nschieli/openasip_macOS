@@ -379,10 +379,17 @@ jobs:
           #    requiring GLIBC_2.39 will not start on anything older, however
           #    "linux-x86_64" the file name sounds.
           echo "=== highest symbol versions required ==="
+          # ⛔ `|| top=""` IS LOad-BEARING, AND ITS ABSENCE PRODUCED A FALSE RED.
+          #    GitHub runs steps as `bash -e {0}`, which `set -uo pipefail` does
+          #    NOT clear. A symbol family with no match makes grep exit 1,
+          #    pipefail propagates it, and the bare assignment then kills the
+          #    script — so the step reported a FAILURE it had not found and
+          #    printed none of the numbers it exists to print. Measured on run
+          #    35089310481: external refs "(none)", then exit 1 anyway.
           for lib in GLIBC GLIBCXX CXXABI; do
             top=$(find "$PREFIX/bin" "$PREFIX/lib" -maxdepth 1 -type f -exec \
                     objdump -T {} + 2>/dev/null \
-                  | grep -o "${lib}_[0-9][0-9.]*" | sort -u -V | tail -1)
+                  | grep -o "${lib}_[0-9][0-9.]*" | sort -u -V | tail -1) || top=""
             echo "  ${lib}: ${top:-<none>}"
           done
           echo "  host: $(ldd --version | head -1)"
