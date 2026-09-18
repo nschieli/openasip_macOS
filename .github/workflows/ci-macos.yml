@@ -398,7 +398,30 @@ jobs:
           Verify:
 
               shasum -a 256 -c openasip-macos-arm64.tar.gz.sha256
-          EOF
+
+          ## Extract from a terminal, not by double-clicking
+
+          These binaries are ad-hoc signed (no Developer ID), so Gatekeeper
+          will not run them once they carry the quarantine flag a browser
+          download sets.
+
+              tar -xzf openasip-macos-arm64.tar.gz
+
+          Archive Utility -- what a double-click in Finder uses -- copies the
+          quarantine flag onto EVERY extracted file. `tar` does not. Measured
+          2026-09-16 on macOS 26: expanding this archive with Archive Utility
+          after a browser download quarantined 5477 of 5478 files, and macOS
+          then refused to run the tools, offering only "Move to Trash".
+
+          For a command-line tool that dialog has no "Open Anyway", and the
+          override in System Settings is per-binary, so extracting correctly is
+          much easier than clearing it afterwards. If a tree is already
+          quarantined:
+
+              xattr -dr com.apple.quarantine local
+
+          Downloads made with `curl`, `gh` or `git` are not quarantined at all
+          and need none of this.
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "OpenASIP macOS arm64 ${GITHUB_REF_NAME}" \
