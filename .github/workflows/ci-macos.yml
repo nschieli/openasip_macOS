@@ -451,12 +451,33 @@ jobs:
 
           Downloads made with `curl`, `gh` or `git` are not quarantined at all
           and need none of this.
+          EOF
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "OpenASIP macOS arm64 ${GITHUB_REF_NAME}" \
             --notes-file NOTES.md \
             openasip-macos-arm64.tar.gz \
             openasip-macos-arm64.tar.gz.sha256
+
+          # ⛔⛔ ASSERT THE ASSET EXISTS. THIS STEP ONCE PUBLISHED NOTHING AND
+          #    WENT GREEN. The NOTES.md heredoc above lost its closing EOF in
+          #    adc9cb6b, so `cat` swallowed the rest of the script — `gh release
+          #    create` became four lines of text INSIDE NOTES.md, bash warned
+          #    "here-document delimited by end-of-file" and exited 0. Tag
+          #    v2.2-macos.4 published the Linux assets and NO macOS asset, and
+          #    step "Publish release" reported SUCCESS with zero stdout.
+          # ⚠ THE SILENCE WAS THE TELL: `gh release create` prints the release
+          #   URL, so no output at all was the only visible symptom — and
+          #   nothing was watching for it.
+          # ⇒ Never infer that a publish happened from the absence of an error.
+          echo "--- asserting the asset actually reached the release ---"
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --json assets --jq '.assets[].name' | tee /tmp/oa-assets.txt
+          grep -qx 'openasip-macos-arm64.tar.gz' /tmp/oa-assets.txt || {
+            echo "::error::the release carries no openasip-macos-arm64.tar.gz — "\
+                 "the publish step did nothing and would otherwise have passed"
+            exit 1
+          }
 
       # ⛔ NOT RUN HERE, AND SAID OUT LOUD RATHER THAN OMITTED: the QEMU install,
       #    the unit-test suite and systemtest.py are exercised by the Linux job.

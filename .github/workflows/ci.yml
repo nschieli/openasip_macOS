@@ -16,6 +16,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ⛔ SECONDS, AND IT WOULD HAVE SAVED A RELEASE. A publish step that published
+  #    nothing and reported success (tag v2.2-macos.4) was an unterminated
+  #    heredoc — see tools/lint-workflows.py. Runs first and needs no build.
+  lint-workflows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install --quiet pyyaml
+      - run: python3 tools/lint-workflows.py
+
   build:
     runs-on: ubuntu-24.04
 
