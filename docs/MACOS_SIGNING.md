@@ -74,15 +74,61 @@ is actually fine — check a fresh extraction before believing a red.
 
 ---
 
+---
+
+## ⭐⭐ A signed + notarized + STAPLED `.pkg` removes the problem structurally
+
+Measured 2026-09-18, same Mac.
+
+```
+pkgbuild    --root <signed prefix> --identifier … --ownership recommended
+productbuild --distribution … --sign "Developer ID Installer: …" --timestamp
+xcrun notarytool submit --wait        → Accepted
+xcrun stapler staple                  → "The staple and validate action worked!"
+spctl -a -t install -vv               → accepted, source=Notarized Developer ID
+pkgutil --check-signature             → notarization trusted, trusted timestamp
+```
+
+**Two results that decide the delivery shape:**
+
+⭐ **The installed files carry NO quarantine — 0 of 5477**, only
+`com.apple.provenance`. So the two traps above **cannot reach a user at all**
+through this path. They still apply to anything shipped as a zip or tarball, and
+to CI verification steps.
+
+⭐ **A QUARANTINED `.pkg` installs with no admin password**:
+`installer -pkg … -target CurrentUserHomeDirectory` → success, rc=0. That comes
+from `<domains enable_currentUserHome="true" enable_localSystem="false"/>` — the
+same non-admin reasoning that makes `~/Applications` worth searching for an
+editor.
+
+⚠ **Stapling only works on pkg/dmg/app, never on loose binaries.** So a stapled
+`.pkg` is also the only shape that needs **no network at install time** — a
+tarball of signed binaries always depends on the online notarization lookup, and
+therefore on trap 1.
+
+⛔ **THE `.pkg` PROVED ABOVE IS NOT SHIPPABLE.** It was built from a
+signed-but-**unvendored** prefix, so its binaries still require
+`/opt/homebrew`. It demonstrates the Gatekeeper chain and nothing whatsoever
+about self-containment.
+
+⛔ **ORDER, because getting it wrong surfaces late and misleadingly:**
+
+    vendor the dylibs → codesign (162) → notarize → staple
+
+`install_name_tool` invalidates signatures, so vendoring after signing
+invalidates all 162 — and that shows up as a **notarization rejection**, not as
+anything that fails locally.
+
+---
+
 ## Not done
 
-- **`xcrun stapler staple`** — works on pkg/dmg/app only, and removes the
-  online-lookup dependency (and therefore trap 1) entirely.
-- **A signed `.pkg`** — the Developer ID *Installer* certificate is still
-  unused. ⭐ A signed + notarized `.pkg` avoids quarantine **structurally**,
-  because installer-placed files are not quarantined.
+- **Vendoring the four Homebrew dylibs** — the remaining blocker for a
+  shippable macOS artifact. Everything above is proven; none of it ships until
+  this is done.
 - **CI wiring** — cert `.p12` and notarization credential as secrets on a macOS
-  runner: keychain import → sign → notarize → staple → upload.
+  runner: keychain import → vendor → sign → notarize → staple → upload.
 
 ## ⚠ An open decision, not a technical one
 
