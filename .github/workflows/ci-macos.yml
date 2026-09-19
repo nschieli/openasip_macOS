@@ -99,6 +99,68 @@ jobs:
           make -j$(sysctl -n hw.ncpu)
           make install
 
+      # ── The native GUI tools ────────────────────────────────────────────────
+      # ⛔⛔ THE PUBLISHED macOS PREFIX HAS CONTAINED NO GUI TOOLS AT ALL, AND
+      #    THE BUILD REPORTED SUCCESS. Measured 2026-09-19 on the artifact of run
+      #    34906662946: no prode, no osed, no hdbeditor, and nothing in bin/
+      #    linking wx — while the LINUX prefix from the same source has them.
+      # ⇒ CAUSE IS NOT YET ESTABLISHED, WHICH IS WHY THIS STEP ONLY REPORTS.
+      #    configure's wx detection ends in an AC_RUN_IFELSE that COMPILES AND
+      #    RUNS a <wx/wx.h> program; if that fails on Darwin it prints a notice,
+      #    sets DO_WX_COMPILE=false, and AM_CONDITIONAL(WX) then drops the GUI
+      #    directories from SUBDIRS. The build succeeds having built no GUI, and
+      #    nothing downstream notices.
+      # ⚠ `brew install … wxwidgets` runs above, so the dependency IS present —
+      #   which is exactly why this was invisible: the obvious check passes.
+      # ⭐ NS, 2026-09-19: "We should always have the vscode extensions and the
+      #    alternative native UIs for both installs." ⇒ this is a product
+      #    requirement now, so the next run must SAY what configure decided
+      #    rather than leaving it to be inferred from an empty bin/.
+      - name: GUI tools — what configure decided, and what got installed
+        if: always()
+        run: |
+          set -uo pipefail
+          echo "=== configure's verdict on wxWidgets ==="
+          wxcfg=$(command -v wx-config || true)
+          echo "wx-config: ${wxcfg:-<not on PATH>}"
+          [ -n "$wxcfg" ] && { echo "  version : $($wxcfg --version 2>&1)"
+                               echo "  basename: $($wxcfg --basename 2>&1)"; }
+          if [ -f openasip/config.log ]; then
+            grep -iE "wx headers|Problems in wx|printing framework|graphical backend|wxWidgets version must"               openasip/config.log | head -10 || echo "  (no wx verdict lines in config.log)"
+          else
+            echo "  (no config.log)"
+          fi
+          echo "=== GUI binaries actually installed ==="
+          found=$(find "${{ github.workspace }}/local" \
+                    \( -name 'prode*' -o -name 'osed*' -o -name 'hdbeditor*' \
+                       -o -name 'pig*' -o -name '*.app' \) 2>/dev/null | head -20)
+          if [ -n "$found" ]; then printf '%s\n' "$found"; else echo "  NONE"; fi
+          echo "=== binaries linking wx ==="
+          n=0
+          for f in "${{ github.workspace }}"/local/bin/*; do
+            [ -f "$f" ] || continue
+            otool -L "$f" 2>/dev/null | grep -qi "libwx" && { echo "  $(basename "$f")"; n=$((n+1)); }
+          done
+          [ "$n" -eq 0 ] && echo "  NONE"
+          echo
+          # ⚠ REPORT ONLY, DELIBERATELY. Failing here would turn a KNOWN gap into
+          #   a red build on every run while the cause is still unknown, which
+          #   buys nothing and hides the next regression. Flip to an error once
+          #   the GUI is expected to be present.
+          [ "$n" -eq 0 ] && echo "::warning::no GUI tools in this prefix — see the "\
+            "config.log verdict above (NS requires native UIs on both installs)"
+          exit 0
+
+      # ⚠ config.log is the only place the wx failure is explained, and it is not
+      #   in the job log. Keep it whatever happens.
+      - name: Upload config.log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-config-log
+          path: openasip/config.log
+          if-no-files-found: warn
+
       - name: oa-selftest
         run: |
           export PATH=${{ github.workspace }}/local/bin:$PATH
