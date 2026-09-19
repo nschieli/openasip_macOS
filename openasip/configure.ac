@@ -718,6 +718,53 @@ AM_CONDITIONAL(LLVM, test x$LLVM_VERSION != x)
 
 ####################################################################
 #
+# ⛔⛔ THE C++ STANDARD MUST BE ESTABLISHED BEFORE ANY LIBRARY CHECK THAT
+#    COMPILES, AND IT USED TO BE SET ~400 LINES BELOW THIS POINT. The
+#    consequence was silent and expensive: wxWidgets 3.3 headers begin with
+#    `#error "C++11 compiler is required to build wxWidgets."`, so configure's
+#    wx test compiled as a bare `g++ -arch arm64` and failed, DO_WX_COMPILE
+#    went false, AM_CONDITIONAL(WX) dropped the GUI directories from SUBDIRS,
+#    and `make` then SUCCEEDED having built no prode, no osed, no hdbeditor.
+#    A published macOS prefix shipped with no GUI tools at all and no error
+#    anywhere.
+#
+# ⚠ NOT A macOS BUG. Any host whose compiler defaults below C++11 loses its GUI
+#   in exactly this way. It surfaced on Darwin only because that is where a
+#   default-standard compiler met wx 3.3 first.
+#
+# ⚠ AND IT COULD NOT BE REPRODUCED BY HAND: invoking the same test manually
+#   picks up the compiler's own default (gnu++17 for clang), so every gate
+#   passes interactively while CI fails. Only the flags configure held AT THAT
+#   INSTANT — in config.log — showed it.
+#
+# ⇒ Moving this up also means every later check compiles with the standard the
+#   BUILD uses, which is what those checks were always supposed to be testing.
+#   Measured 2026-09-19 from run 35452462075's config.log.
+
+cxx11=true
+
+# Check that the compiler supports C++11 mode.
+AX_CXX_COMPILE_STDCXX_11([noext], [mandatory])
+
+# AX_CXX_COMPILE_STDCXX_11 macro sets CXXFLAGS to include -std=c++0x or
+# -std=c++11, check which one and set other flags accordingly.
+define_cxx0x=false
+for flag in $CXXFLAGS; do
+    if test x"$flag" = x-std=c++0x; then
+       define_cxx0x=true
+       break
+    fi
+done
+   
+# Set the flags to use -std=c++0x or -std=c++17.
+if test x"$define_cxx0x" = xtrue; then
+   AC_DEFINE(HAVE_CXX0X, [], [Using C++0x language standard switch.])
+   CXXFLAGS="$CXXFLAGS -std=c++0x"
+else
+   AC_DEFINE(HAVE_CXX11, [], [Using C++17 language standard switch.])
+   CXXFLAGS="$CXXFLAGS -std=c++17"
+fi
+
 # wxWidgets is a cross-platform GUI library used in TCE.
 #
 # It's not required but without it any GUIs of the project won't
@@ -1291,29 +1338,6 @@ MIN_BOOST_VERSION=1.41.0
 
 AC_LANG(C++)
 
-cxx11=true
-
-# Check that the compiler supports C++11 mode.
-AX_CXX_COMPILE_STDCXX_11([noext], [mandatory])
-
-# AX_CXX_COMPILE_STDCXX_11 macro sets CXXFLAGS to include -std=c++0x or
-# -std=c++11, check which one and set other flags accordingly.
-define_cxx0x=false
-for flag in $CXXFLAGS; do
-    if test x"$flag" = x-std=c++0x; then
-       define_cxx0x=true
-       break
-    fi
-done
-   
-# Set the flags to use -std=c++0x or -std=c++17.
-if test x"$define_cxx0x" = xtrue; then
-   AC_DEFINE(HAVE_CXX0X, [], [Using C++0x language standard switch.])
-   CXXFLAGS="$CXXFLAGS -std=c++0x"
-else
-   AC_DEFINE(HAVE_CXX11, [], [Using C++17 language standard switch.])
-   CXXFLAGS="$CXXFLAGS -std=c++17"
-fi
 
 
 ######################################
