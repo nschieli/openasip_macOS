@@ -415,10 +415,20 @@ jobs:
 
           For a command-line tool that dialog has no "Open Anyway", and the
           override in System Settings is per-binary, so extracting correctly is
-          much easier than clearing it afterwards. If a tree is already
-          quarantined:
+          much easier than fixing it afterwards.
+
+          If a tree is already quarantined but you have NOT yet tried to run it:
 
               xattr -dr com.apple.quarantine local
+
+          ## If macOS has already refused to run it, RE-EXTRACT
+
+          Removing the quarantine flag at that point does NOT help. macOS caches
+          the refusal against that copy of the file and the cache survives
+          clearing the attribute -- measured 2026-09-18: a tree killed once was
+          still killed afterwards, while the same bytes extracted to a new path
+          ran normally. Delete the extracted tree and unpack the archive again
+          with `tar`.
 
           Downloads made with `curl`, `gh` or `git` are not quarantined at all
           and need none of this.
