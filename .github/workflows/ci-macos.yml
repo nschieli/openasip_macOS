@@ -93,9 +93,30 @@ jobs:
           export PATH=${{ github.workspace }}/local/bin:$PATH
           cd openasip
           ./autogen.sh
+          # ⛔⛔ CXXFLAGS WITH A STANDARD, OR THE GUI SILENTLY DOES NOT BUILD.
+          #     configure's wx check compiles a <wx/wx.h> program with the
+          #     CXXFLAGS IT HAS AT THAT MOMENT — and the project appends
+          #     -std=c++11 -std=c++17 LATER. So the test ran as plain
+          #     `g++ -arch arm64 …`, wx 3.3's defs.h hit
+          #     #error "C++11 compiler is required to build wxWidgets",
+          #     DO_WX_COMPILE went false and AM_CONDITIONAL(WX) dropped every
+          #     GUI directory from SUBDIRS. make then succeeded having built no
+          #     GUI, which is why the prefix shipped without prode/osed and
+          #     nothing failed.
+          # ⚠ MEASURED, not inferred: config.log from run 35452462075, line
+          #   21031 shows the compile line with no -std at all, while the
+          #   variable dump at the end of the same file records
+          #   CXXFLAGS=' -arch arm64 -std=c++11 -std=c++17'. The Mac seat ran
+          #   the identical test by hand and it PASSED, because an explicit
+          #   `c++` invocation defaults to gnu++17 — which is exactly why this
+          #   was invisible to everyone reading the recipe.
+          # ⇒ Setting it here fixes the build we ship. The deeper fix is to move
+          #   the standard ahead of the wx checks in configure.ac, so a developer
+          #   configuring by hand gets a GUI too.
           ./configure --prefix=${{ github.workspace }}/local \
                       --with-boost=/opt/homebrew \
-                      --with-xerces=/opt/homebrew
+                      --with-xerces=/opt/homebrew \
+                      CXXFLAGS="-std=c++17"
           make -j$(sysctl -n hw.ncpu)
           make install
 
