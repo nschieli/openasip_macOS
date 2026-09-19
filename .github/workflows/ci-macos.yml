@@ -7,18 +7,23 @@ name: Build and Test (macOS arm64)
 # It certifies the thing this fork exists for: that OpenASIP builds and self-tests
 # on Apple Silicon from a clean checkout, with no developer machine's state.
 
+# ⛔⛔ TAGS AND MANUAL DISPATCH ONLY — macOS MINUTES ARE BILLED ON PUBLIC REPOS
+#     TOO. Measured 2026-09-19: 26 macOS jobs since 1 September, 863 minutes,
+#     roughly $54-69 of a bill that crossed $100. The free allowance for public
+#     repositories covers standard LINUX runners; macOS is excluded.
+# ⚠ THE OLD GATE BELIEVED THE OPPOSITE AND SAID SO IN ITS OWN COMMENT — "free on
+#   public ones" — so going public did not make this free, it made it
+#   UNCONDITIONAL: every push to main and every PR, at ~33 minutes a build.
+# ⇒ NS, 2026-09-19: "anything long can be run on my local macOS machine and for
+#   Linux we can run on the linux box. When we are reasonably sure things will
+#   work, we can push it there." A tag is that moment; a push is not.
 on:
   push:
-    branches:
-      - main
     # A tag builds and PUBLISHES a release. Downstream (Homebrew, the product
     # package) needs a URL that does not expire; a workflow artifact does, in
     # 30 days.
     tags:
       - 'v*'
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -33,13 +38,11 @@ jobs:
     permissions:
       contents: write
 
-    # ⚠ COST GATE. macOS runner minutes are billed at 10x on PRIVATE repos and are
-    #   free on public ones. While this repo is private the job runs ONLY when
-    #   someone asks for it; the moment it goes public it runs on every push with
-    #   no further change. Do not remove this without meaning to.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.repository.private == false
+    # ⚠ NO `if:` GATE ANY MORE, AND THAT IS THE POINT: the triggers above are
+    #   the gate now. The old condition keyed on repository.private and was
+    #   written believing macOS was free once public — it is not, and a
+    #   condition that only ever widened access is worse than no condition at
+    #   all. What actually limits spend is never starting the job.
 
     env:
       LLVM_VERSION: 22
