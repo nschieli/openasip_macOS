@@ -332,7 +332,36 @@ jobs:
           [ "$fail" -eq 0 ] && echo "the installed tree is relocatable: linkage, data files AND compilation"
           exit $fail
 
+      - name: Record what was built
+        run: |
+          cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF
+          repository : ${{ github.repository }}
+          commit     : ${{ github.sha }}
+          ref        : ${{ github.ref_name }}
+          run        : ${{ github.run_id }}
+          built      : $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner     : $(. /etc/os-release && echo "$PRETTY_NAME") $(uname -m)
+          llvm       : ${LLVM_VERSION}
+
+          Licensed LGPL v2.1. Corresponding source is the repository and commit
+          above: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+          EOF
+          cat ${{ github.workspace }}/local/BUILD-INFO
+
+      - name: Package the prefix
+        run: |
+          cd ${{ github.workspace }}
+          tar -czf openasip-linux-x86_64.tar.gz local
+          ls -lh openasip-linux-x86_64.tar.gz
+
       # ── Self-containment ────────────────────────────────────────────────────
+      # ⛔ THIS ONE STILL ENFORCES, AND macOS DOES NOT — THE ASYMMETRY IS THE
+      #    POINT, NOT AN OVERSIGHT. The macOS prefix links Homebrew ON PURPOSE
+      #    and NS has ruled the open-source artifact stays that way (2026-09-19),
+      #    so a failure there is the expected state and cannot be a gate. This
+      #    prefix has no such accepted external dependency: it bundles its own
+      #    LLVM and reaches only system paths, so a failure HERE is a genuine
+      #    surprise and worth stopping for.
       # ⛔ THE ASSET IS NAMED FOR A DISTRO, SO THE DISTRO CLAIM HAS TO BE
       #    MEASURED. A prefix built here links against the runner's glibc and
       #    libstdc++, and the SYMBOL VERSIONS it requires — not the file names —
@@ -399,28 +428,6 @@ jobs:
                  "system paths — it will not run where those are absent"
           fi
           exit $fail
-
-      - name: Record what was built
-        run: |
-          cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF
-          repository : ${{ github.repository }}
-          commit     : ${{ github.sha }}
-          ref        : ${{ github.ref_name }}
-          run        : ${{ github.run_id }}
-          built      : $(date -u +%Y-%m-%dT%H:%M:%SZ)
-          runner     : $(. /etc/os-release && echo "$PRETTY_NAME") $(uname -m)
-          llvm       : ${LLVM_VERSION}
-
-          Licensed LGPL v2.1. Corresponding source is the repository and commit
-          above: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
-          EOF
-          cat ${{ github.workspace }}/local/BUILD-INFO
-
-      - name: Package the prefix
-        run: |
-          cd ${{ github.workspace }}
-          tar -czf openasip-linux-x86_64.tar.gz local
-          ls -lh openasip-linux-x86_64.tar.gz
 
       # ⛔ ALWAYS UPLOAD, EVEN ON FAILURE — see the macOS job: a failing check
       #    before this step left `gh run download` with nothing to fetch, so the

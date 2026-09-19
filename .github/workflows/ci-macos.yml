@@ -248,6 +248,27 @@ jobs:
       #   alongside a distributed binary. It is this repository, at the commit
       #   named in BUILD-INFO below, which is why that file is written here
       #   rather than assumed.
+      - name: Record what was built
+        run: |
+          cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF
+          repository : ${{ github.repository }}
+          commit     : ${{ github.sha }}
+          ref        : ${{ github.ref_name }}
+          run        : ${{ github.run_id }}
+          built      : $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner     : $(sw_vers -productName) $(sw_vers -productVersion) $(uname -m)
+
+          Licensed LGPL v2.1. Corresponding source is the repository and commit
+          above: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+          EOF
+          cat ${{ github.workspace }}/local/BUILD-INFO
+
+      - name: Package the prefix
+        run: |
+          cd ${{ github.workspace }}
+          tar -czf openasip-macos-arm64.tar.gz local
+          ls -lh openasip-macos-arm64.tar.gz
+
       # ── Self-containment ────────────────────────────────────────────────────
       # ⛔⛔ RELOCATABILITY AND SELF-CONTAINMENT ARE DIFFERENT CLAIMS, AND THE
       #    STEP ABOVE ONLY PROVES THE FIRST. It checks `otool -D` — libopenasip's
@@ -321,33 +342,31 @@ jobs:
             | awk '/LC_BUILD_VERSION/,/sdk/' | grep -E "minos|sdk" | head -4 \
             || echo "(LC_BUILD_VERSION not readable)"
 
+          # ⛔⛔ REPORT-ONLY, AND THE REASON IS A PRODUCT DECISION, NOT A BUG.
+          #    NS, 2026-09-19: "we will not sign the open source packages for the
+          #    users. I am assuming most people using openasip_macOS will rebuild
+          #    locally. I want us to provide a convenience package to basic
+          #    users. That is Verdon."
+          # ⇒ SELF-CONTAINMENT IS A VERDON PROPERTY, NOT AN openasip_macOS ONE.
+          #    This prefix links Homebrew deliberately; enforcing here could
+          #    never go green and blocked EVERY release of the open-source
+          #    toolchain (runs 35398854877, 35410477986, 35411282317).
+          # ⚠ THE WALK STAYS because the inventory is what taught us the real
+          #   reach — 56 xerces / 27 boost_regex / 27 boost_thread / 6 zstd, and
+          #   the share/openasip/**.so plugins nobody had counted. Deleting the
+          #   step would throw that away to silence a number that is correct.
+          # ⛔ ENFORCEMENT LIVES WHERE THE PROPERTY IS OWNED: verdon's
+          #   tools/macos/vendor-dylibs.sh, whose closure is ELEVEN libraries,
+          #   not the four named here — boost_regex pulls icu4c
+          #   (libicudata/libicui18n/libicuuc) and boost_thread pulls four more
+          #   boost libs. Vendoring only the four produces a tree that works on
+          #   any Mac with Homebrew and fails on a customer's.
           if [ "$fail" -ne 0 ]; then
-            echo "::error::shipped Mach-O files reference libraries outside the prefix "\
-                 "— this tarball is NOT self-contained and will fail on a machine "\
-                 "without them (see the inventory above)"
+            echo "::notice::this prefix links libraries outside itself (inventory "\
+                 "above). Expected for the open-source artifact; Verdon vendors "\
+                 "them. NOT a build failure."
           fi
-          exit $fail
-
-      - name: Record what was built
-        run: |
-          cat > ${{ github.workspace }}/local/BUILD-INFO <<EOF
-          repository : ${{ github.repository }}
-          commit     : ${{ github.sha }}
-          ref        : ${{ github.ref_name }}
-          run        : ${{ github.run_id }}
-          built      : $(date -u +%Y-%m-%dT%H:%M:%SZ)
-          runner     : $(sw_vers -productName) $(sw_vers -productVersion) $(uname -m)
-
-          Licensed LGPL v2.1. Corresponding source is the repository and commit
-          above: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
-          EOF
-          cat ${{ github.workspace }}/local/BUILD-INFO
-
-      - name: Package the prefix
-        run: |
-          cd ${{ github.workspace }}
-          tar -czf openasip-macos-arm64.tar.gz local
-          ls -lh openasip-macos-arm64.tar.gz
+          exit 0
 
       # ⛔ ALWAYS UPLOAD, EVEN ON FAILURE. The self-containment check above runs
       #    BEFORE this step, so a failing check meant `gh run download` reported
