@@ -535,12 +535,16 @@ jobs:
           Downloads made with `curl`, `gh` or `git` are not quarantined at all
           and need none of this.
           EOF
+          printf '\n---\nRelease %s of the nschieli fork. Tracks upstream OpenASIP 2.2; local/BUILD-INFO names the exact commit.\n' \
+                 "${GITHUB_REF_NAME}" >> NOTES.md
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "OpenASIP macOS arm64 ${GITHUB_REF_NAME}" \
+            --title "OpenASIP toolchain ${GITHUB_REF_NAME} — Linux x86_64 + macOS arm64" \
             --notes-file NOTES.md \
             openasip-macos-arm64.tar.gz \
-            openasip-macos-arm64.tar.gz.sha256
+            openasip-macos-arm64.tar.gz.sha256 \
+          || gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+               openasip-macos-arm64.tar.gz openasip-macos-arm64.tar.gz.sha256
 
           # ⛔⛔ ASSERT THE ASSET EXISTS. THIS STEP ONCE PUBLISHED NOTHING AND
           #    WENT GREEN. The NOTES.md heredoc above lost its closing EOF in

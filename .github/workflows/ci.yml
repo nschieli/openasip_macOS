@@ -491,10 +491,17 @@ jobs:
 
               sha256sum -c openasip-linux-x86_64.tar.gz.sha256
           EOF
+          # ⚠ THE TAG NO LONGER NAMES THE UPSTREAM VERSION (NS, 2026-09-19: the
+          #   fork is "arguably less than 1.0.0 of our own"), so the notes must:
+          #   a user downloading this has no other way to tell which OpenASIP
+          #   they are getting, and the old v2.2-macos.N scheme said it in the
+          #   filename.
+          printf '\n---\nRelease %s of the nschieli fork. Tracks upstream OpenASIP 2.2; local/BUILD-INFO names the exact commit.\n' \
+                 "${GITHUB_REF_NAME}" >> NOTES-linux.md
           ASSETS="openasip-linux-x86_64.tar.gz openasip-linux-x86_64.tar.gz.sha256"
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "OpenASIP ${GITHUB_REF_NAME}" \
+            --title "OpenASIP toolchain ${GITHUB_REF_NAME} — Linux x86_64 + macOS arm64" \
             --notes-file NOTES-linux.md \
             $ASSETS \
           || gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber $ASSETS
