@@ -180,3 +180,8 @@ tce-env.sh
 __pycache__/
 *.pyc
 *.pyo
+
+# a local build prefix — tools/build-macos.sh installs here by default.
+# ⛔ 1341 files of build output, carrying absolute paths from the machine that
+#    built them, were once committed from here. Never again.
+/local/
