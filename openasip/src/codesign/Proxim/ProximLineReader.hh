@@ -49,13 +49,30 @@
  * simulator engine. The worker thread waits for the user input
  * by listening to the 'input_' condition. When the line reader receives
  * input from the GUI thread, the worker thread is signaled about the input
- * by setting the input_ condition. If the worker thread is busy and not
- * listening to the input_ condition signal when the GUI thread signals
- * about user input, the signal is lost and the user input is ignored.
- * Therefore the user input should be disabled in the GUI when the worker
- * thread is busy. ProximLineReader requests user input and sends simulator
- * engine output to the GUI thread using SimulatorEvents and the standard
- * wxWidgets event handling system.
+ * by setting the input_ condition. ProximLineReader requests user input and
+ * sends simulator engine output to the GUI thread using SimulatorEvents and
+ * the standard wxWidgets event handling system.
+ *
+ * The queue and the condition form a monitor, and all three of its rules are
+ * load-bearing here:
+ *
+ *  - mutex_ is held whenever inputQueue_ is touched, by BOTH threads. It is
+ *    not merely an argument to Wait(): std::queue is not thread safe, and
+ *    without the lock on the producer side there is no happens-before edge
+ *    between the push and the worker's read of it.
+ *  - Wait() is called from a loop testing the queue, never from an "if".
+ *    A condition variable has no memory, so a signal raised outside the wait
+ *    is lost forever, and pthreads is permitted to wake a waiter spuriously,
+ *    which would otherwise fall through to front()/pop() on an empty queue.
+ *  - The wait is bounded. The worker must return to its own loop at regular
+ *    intervals or it can never observe a wxThread::Delete() request, and the
+ *    application cannot exit.
+ *
+ * This class previously documented the lost signal as expected behaviour,
+ * asking the GUI to disable user input while the worker was busy. That did
+ * not hold: quitting signals "quit" from the GUI thread with no such
+ * interlock, and losing it left the worker asleep in Wait() forever while
+ * the window stayed on screen.
  */
 class ProximLineReader : public LineReader {
 public:
@@ -87,6 +104,17 @@ public:
     ProximLineReader& operator=(const ProximLineReader&) = delete;
 
 private:
+    /// Upper bound on how long the worker thread may stay inside Wait().
+    /// Bounding it is what lets ProximSimulationThread::Entry() come back
+    /// around its own loop and notice a Delete() request; readLine() returns
+    /// an empty string on expiry, which that loop already handles.
+    static const unsigned long INPUT_POLL_INTERVAL_MS = 100;
+
+    /// True once the prompt has been written for the current wait. Without
+    /// it a bounded wait would reprint the prompt on every expiry.
+    bool promptPrinted_;
+
+    /// Guards inputQueue_ in both threads, and pairs with input_.
     wxMutex* mutex_;
     /// Condition, which is signaled when user input is received from the GUI.
     wxCondition* input_;

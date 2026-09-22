@@ -47,6 +47,7 @@ const std::string ProximLineReader::DEFAULT_LOG_FILE_NAME = ".proximHistory";
  */
 ProximLineReader::ProximLineReader() :
     LineReader(),
+    promptPrinted_(false),
     mutex_(new wxMutex()),
     input_(new wxCondition(*mutex_)),
     outputStream_(new ProximLROutputStream(this)) {
@@ -59,7 +60,9 @@ ProximLineReader::ProximLineReader() :
  * The Destructor.
  */
 ProximLineReader::~ProximLineReader() {
-    mutex_->Unlock();
+    // No Unlock() here. mutex_ is now only ever held by a wxMutexLocker on
+    // the stack, so nothing owns it at this point; the old unconditional
+    // Unlock() was releasing a mutex this thread had not necessarily locked.
     delete mutex_;
     delete input_;
 }
@@ -105,13 +108,29 @@ ProximLineReader::readLine(std::string prompt) {
        prompt = prompt_;
     }
 
+    wxMutexLocker lock(*mutex_);
+
     if (inputQueue_.empty()) {
-        output(prompt);
-        mutex_->TryLock();
-        input_->Wait();
+        if (!promptPrinted_) {
+            output(prompt);
+            promptPrinted_ = true;
+        }
+
+        // A loop, not an "if": a wakeup proves nothing about the queue.
+        while (inputQueue_.empty()) {
+            if (input_->WaitTimeout(INPUT_POLL_INTERVAL_MS) == wxCOND_TIMEOUT) {
+                // Hand control back to ProximSimulationThread::Entry() so it
+                // can test its stop and delete requests. Its loop skips an
+                // empty command and calls us again; the prompt is not
+                // reprinted because promptPrinted_ is still set.
+                return "";
+            }
+        }
     }
+
     std::string input = inputQueue_.front();
     inputQueue_.pop();
+    promptPrinted_ = false;
 
     output(input + "\n");
 
@@ -129,6 +148,10 @@ ProximLineReader::readLine(std::string prompt) {
  */
 void
 ProximLineReader::input(std::string input) {
+    // The lock is what makes the push visible to the worker thread, and what
+    // stops the signal being raised in the window between its queue test and
+    // its Wait(). Signalling without it is how "quit" went missing.
+    wxMutexLocker lock(*mutex_);
     inputQueue_.push(input);
     // Signal simulation about the input.
     input_->Signal();
@@ -155,11 +178,17 @@ ProximLineReader::charQuestion(
 
     // Char question answer is requested from the GUI thread until
     // a valid answer is received.
+    // This path used to call Wait() without owning mutex_ at all, which is
+    // undefined behaviour, and with the same unguarded "if".
+    wxMutexLocker lock(*mutex_);
+
     std::string answer;
     do {
         if (inputQueue_.empty()) {
             output(question + " [" + allowedChars + "]? ");
-            input_->Wait();
+            while (inputQueue_.empty()) {
+                input_->WaitTimeout(INPUT_POLL_INTERVAL_MS);
+            }
         }
         answer = inputQueue_.front();
         inputQueue_.pop();
