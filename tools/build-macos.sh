@@ -55,6 +55,37 @@ if [ "$CHECK_ONLY" = 0 ]; then
              echo "   openasip/tools/scripts/install_llvm_22.sh <prefix>  (hours)"; exit 1; }
     ok "LLVM: $OA_LLVM_PREFIX"
 
+    # ⛔⛔ THE LLVM PREFIX MUST NOT ALSO BE AN OPENASIP PREFIX. configure bakes
+    #     $OA_LLVM_PREFIX/lib into the rpaths, so if that directory ALSO holds
+    #     a libopenasip, a custom operation's .opb links THAT one by absolute
+    #     path while testosal loads ours through @rpath. Two libopenasip in one
+    #     process means two LLVMs, and LLVM notices:
+    #
+    #       CommandLine Error: Option 'dump-loop-info' registered more than once!
+    #       LLVM ERROR: inconsistency in registered CommandLine options
+    #
+    #     testosal then aborts with SIGABRT and the only visible symptom is
+    #     oa-selftest's custom-operation test asserting on an EMPTY string.
+    #     Measured 2026-09-20 against ~/projects/local, which is a complete
+    #     older install rather than a bare LLVM.
+    # ⚠ THE SAME SHAPE AS THE DUPLICATE wxWidgets LIBRARIES in the installer:
+    #   one library loaded twice, and a global registry that notices.
+    if [ "$OA_LLVM_PREFIX" != "$OA_PREFIX" ] && \
+       ls "$OA_LLVM_PREFIX"/lib/libopenasip* >/dev/null 2>&1; then
+        echo
+        echo "⛔ OA_LLVM_PREFIX=$OA_LLVM_PREFIX also contains libopenasip."
+        echo "   Building against it produces a toolchain that ABORTS on any"
+        echo "   custom operation, because the .opb and testosal each load a"
+        echo "   different libopenasip and therefore a different LLVM."
+        echo
+        echo "   Use a prefix holding only the patched LLVM, or build into the"
+        echo "   same prefix (OA_LLVM_PREFIX=\"$OA_PREFIX\")."
+        echo "   Set OA_ALLOW_MIXED_PREFIX=1 to proceed anyway; oa-selftest's"
+        echo "   custom-operation test is expected to fail if you do."
+        [ -n "${OA_ALLOW_MIXED_PREFIX:-}" ] || exit 1
+        echo "   (OA_ALLOW_MIXED_PREFIX set — continuing)"
+    fi
+
     say "configure"
     cd "$HERE/openasip"
     ./autogen.sh >/dev/null
