@@ -184,6 +184,11 @@ jobs:
           name: macos-config-log
           path: openasip/config.log
           if-no-files-found: warn
+          # ⛔ THE ONLY UPLOAD IN THIS REPO WITH NO RETENTION, so it kept for the
+          #    90-day default while both prefix uploads below cap themselves at
+          #    30. A diagnostic log is wanted while the failure is being read
+          #    and never after that.
+          retention-days: 7
 
       - name: oa-selftest
         run: |
