@@ -1,14 +1,27 @@
 <!--
     Copyright (C) 2026 Nicolas Schieli.
 
-    Licensed by the copyright holder under the GNU Lesser General Public
-    License, version 2.1 or (at your option) any later version, to match the
-    licence of the OpenASIP project it is distributed alongside.
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
 
-    This is an original work, not a modification of OpenASIP; the LGPL applies
-    here by the author's choice, not by OpenASIP's LICENSE.txt.
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
 
-    SPDX-License-Identifier: LGPL-2.1-or-later
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+    SPDX-License-Identifier: MIT
+
+    This is an original work, not a modification of OpenASIP.
 -->
 
 # Building OpenASIP on macOS (Apple Silicon)
