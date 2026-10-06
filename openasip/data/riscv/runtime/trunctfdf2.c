@@ -16,22 +16,43 @@
  * compiles to an empty object, and this is the one helper that keeps the
  * GNU-toolchain-free path from linking real programs.
  *
- * Written for OpenASIP rather than copied from compiler-rt: that code is
- * Apache-2.0-with-LLVM-exception, which does not combine with this project's
- * LGPL-2.1. The algorithm below is the standard IEEE-754 shift-and-round
- * conversion, implemented over clang's _BitInt(128) (supported on 32-bit
- * targets, unlike __int128).
+ * Written from scratch rather than taken from compiler-rt because compiler-rt
+ * has nothing to take: as described above, its trunctfdf2.c compiles to an
+ * empty object on any 32-bit target. The algorithm below is the standard
+ * IEEE-754 shift-and-round conversion, implemented over clang's _BitInt(128)
+ * (supported on 32-bit targets, unlike __int128).
+ *
+ * An earlier version of this comment gave the reason as a licence conflict
+ * between compiler-rt's Apache-2.0-with-LLVM-exception and this project's
+ * LGPL-2.1. That was never the load-bearing reason, and it is not one here:
+ * this file is MIT, and MIT combines with Apache-2.0-WITH-LLVM-exception
+ * without difficulty. Do not re-derive the constraint.
  *
  * Rounding is round-to-nearest, ties-to-even. Signalling NaNs are quieted,
  * as the operation is defined to do; NaN payload bits are preserved as far as
  * the narrower destination allows.
  *
- * Copyright (C) 2026 Tampere University.
+ * Copyright (C) 2026 Nicolas Schieli.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ *
+ * SPDX-License-Identifier: MIT
  */
 
 typedef unsigned _BitInt(128) oa_u128;
