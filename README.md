@@ -59,10 +59,7 @@ covered by that licence. The HDBs are listed in `openasip/hdb/LICENSE-NOTICE.md`
 Both platforms are built and self-tested on every change.
 
 License:
- * OpenASIP project source code is licensed with LGPL v2.1.
- * Generated hardware description files are licensed with a more
-permissive MIT license, to allow the designer more freedom to
-choose the sublicensing of the produced processors.
+ * OpenASIP project source code is licensed with the MIT license. New contributions will be MIT licensed.
  * Read more in [LICENSE.txt](https://github.com/cpc/openasip/blob/main/LICENSE.txt)
 
 Links:
