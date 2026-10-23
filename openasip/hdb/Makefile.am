@@ -44,7 +44,10 @@ nobase_base_DATA =	$(srcdir)/asic_130nm_1.5V.hdb \
 					$(srcdir)/xilinx_series7.hdb \
 					$(srcdir)/xilinx_vhdl/* \
 					$(srcdir)/litert.hdb \
-					$(srcdir)/lattice_ecp5_vhdl/*
+					$(srcdir)/lattice_ecp5_vhdl/* \
+					$(srcdir)/mixed_hdl.hdb \
+					$(srcdir)/mixed_hdl/vhdl/* \
+					$(srcdir)/mixed_hdl/verilog/*
 
 EXTRA_DIST = ${nobase_base_DATA}
 
