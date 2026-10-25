@@ -402,8 +402,10 @@ ProGeScriptGenerator::generateIverilogSimulate() {
            << endl;
     stream << "fi" << endl;
 
+    // The compiled-in SIMTIME is only the default: pass the run time limit
+    // (-r) to the testbench, or every run stops at the default.
     stream << "./" << testbenchName_
-           << " --assert-level=none" << endl;
+           << " +SIMTIME=${runtime} --assert-level=none" << endl;
 
     stream.close();
 }
