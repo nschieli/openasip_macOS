@@ -51,10 +51,15 @@ module testbench
     integer  exec_count_file;
     integer  scan_file;
 
-  // Stop simulation after `SIMTIME, if defined
+  // Stop simulation after `SIMTIME, if defined. A +SIMTIME=<ns> plusarg at
+  // run time overrides the compiled default, so the simulate script's run
+  // time limit applies without recompiling.
   `ifdef SIMTIME
+  integer simtime;
   initial begin
-     #(`SIMTIME + PERIOD) $finish;
+     if (!$value$plusargs("SIMTIME=%d", simtime))
+        simtime = `SIMTIME;
+     #(simtime + PERIOD) $finish;
   end
   `endif
 
