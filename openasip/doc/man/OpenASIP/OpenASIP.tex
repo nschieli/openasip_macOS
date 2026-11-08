@@ -8916,11 +8916,31 @@ Currently, the following settings are supported.
 \begin{description}
 \item[bus\_trace {\emph{boolean}}] %
   Enables writing of the bus trace. Bus trace stores values written to each bus
-in each simulated clock cycle.
+in each simulated clock cycle, one line per cycle, in \file{<program>.bustrace}.
+The setting affects how the simulation starts, so it must be given before the
+machine and the program are loaded (in a script: \texttt{setting bus\_trace 1}
+before \texttt{mach} and \texttt{prog}, not with \texttt{-a}/\texttt{-p}).
+An existing trace file is not overwritten: the next one is written as
+\file{<program>.bustrace.1}, and so on.
+
+\item[call\_history\_length {\emph{integer}}] %
+  Sets the length of the last procedure transfers to save in memory for call
+trace printing.
 
 \item[execution\_trace  {\emph{boolean}}] %
   Enables writing of the basic execution trace. Basic execution trace stores the
 address of the executed instruction in each simulated clock cycle. 
+
+\item[fu\_conflict\_detection {\emph{boolean}}] %
+  Function unit resource conflict detection. Enabled by default; disable it
+for speed.
+
+\item[function\_cycles\_tracking {\emph{boolean}}] %
+  Attributes every executed cycle to the function it belongs to, exclusively
+(callees are not included), and counts the calls. The results are printed by
+\texttt{info stats function\_cycles} and included in \texttt{info proc stats}.
+Compile with \texttt{-{}-inline-threshold=0} to keep functions apart; otherwise
+most code is inlined into \texttt{main}.
 
 \item[history\_filename {\emph{string}}]%
   The name of the file to store the command history, if command history saving
@@ -8933,6 +8953,15 @@ is enabled.
  Maximum count of last commands stored in memory. This does not affect writing
 of the command history log, all commands are written to the log if logging is
 enabled.
+
+\item[memory\_access\_tracking {\emph{boolean}}]%
+ Tracking of memory reads and writes.
+
+\item[n\_gram\_tracking {\emph{boolean}}]%
+ Counts the operations executed, in execution order, as bigrams and trigrams
+(for example \texttt{ADD -> AND -> SHRU}). The most frequent sequences are
+candidates for custom operations. The results are printed by
+\texttt{info stats n\_grams} and included in \texttt{info proc stats}.
 
 \item[next\_instruction\_printing {\emph{boolean}}]%
 Print the next executed instruction when simulation stops, for example,
