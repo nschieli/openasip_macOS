@@ -806,12 +806,11 @@ int main(int argc, char* argv[]) {
             cout 
                 << "No fitting processor configurations were created." << endl;
         } else {
-            if (Application::verboseLevel() > 0) {
-                Application::logStream()
-                    << "Best result configurations:" << std::endl;
-                for (unsigned int i = 0; i < result.size(); i++) {
-                    Application::logStream() << " " << result[i] << endl;
-                }
+            // Always on stdout: scripts (minimize-ic) read the last line to
+            // get the best configuration id.
+            cout << "Best result configurations:" << endl;
+            for (unsigned int i = 0; i < result.size(); i++) {
+                cout << " " << result[i] << endl;
             }
             if (options->writeOutBestConfiguration() && result.size() > 0) {
                 dumpConfiguration(dsdb, *options, result[result.size() - 1]);

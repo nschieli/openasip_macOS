@@ -36,10 +36,17 @@ output_adf=$PWD/$3
 
 set -x
 
-explore -a $input_adf $dsdb
-best_result=`explore -e SimpleICOptimizer -u tpef=$program -s 1 ${dsdb}|tail -1`
+explore -a "$input_adf" "$dsdb" || { rm -fr "$temp_dir"; exit 1; }
+best_result=`explore -e SimpleICOptimizer -u tpef="$program" -s 1 "${dsdb}" | tail -1 | tr -d ' '`
+case "$best_result" in
+    ''|*[!0-9]*)
+        echo "minimize-ic: the explorer reported no optimized configuration" >&2
+        rm -fr "$temp_dir"
+        exit 1;;
+esac
 
-cd $temp_dir
-explore -w $best_result ${dsdb}
-mv $best_result.adf $output_adf
-rm -fr $temp_dir
+cd "$temp_dir"
+explore -w "$best_result" "${dsdb}" && mv "$best_result.adf" "$output_adf"
+status=$?
+rm -fr "$temp_dir"
+exit $status
