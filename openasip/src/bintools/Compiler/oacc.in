@@ -1185,12 +1185,20 @@ p.add_option('-O', '--optimization-level',
              "3 = same that 2. NOTE: For optimal floating point performance,"
              "this switch must be given also when compiling bc files to tpef.")
 
+def append_keep_symbols(option, opt_str, value, parser):
+    # -k may be given several times: every list given is kept, not just the
+    # last one (-k a -k b is the same as -k a,b).
+    previous = parser.values.keep_symbols
+    parser.values.keep_symbols = value if previous == "" else previous + "," + value
+
 p.add_option('-k', '--keep-symbols',
-             type="string", action="store",
-             metavar='sym1,sym2,sym3', dest='keep_symbols', default="",
+             type="string", action="callback", callback=append_keep_symbols,
+             metavar='sym1,sym2,sym3', dest='keep_symbols',
              help="List of symbols whose optimization away is prevented. "
+             "Can be given several times; the lists are combined. "
              "If you are using this, remember to define "
              "at least 'main' symbol.")
+p.set_defaults(keep_symbols="")
 
 p.add_option('-o', '--output-name',
              type="string", action="store", metavar='file',
