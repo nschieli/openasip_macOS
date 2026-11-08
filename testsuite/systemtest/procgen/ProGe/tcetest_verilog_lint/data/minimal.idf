@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<adf-implementation>
+  <ic-decoder-plugin>
+    <name>DefaultICDecoder</name>
+    <file>tce:DefaultICDecoderPlugin.so</file>
+  </ic-decoder-plugin>
+  <rf name="RF">
+    <hdb-file>tce:generate_rf_iu.hdb</hdb-file>
+    <rf-id>38</rf-id>
+  </rf>
+  <rf name="bool">
+    <hdb-file>tce:mixed_hdl.hdb</hdb-file>
+    <rf-id>1</rf-id>
+  </rf>
+</adf-implementation>
