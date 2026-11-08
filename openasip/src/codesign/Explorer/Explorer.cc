@@ -806,12 +806,15 @@ int main(int argc, char* argv[]) {
             cout 
                 << "No fitting processor configurations were created." << endl;
         } else {
-            if (Application::verboseLevel() > 0) {
-                Application::logStream()
-                    << "Best result configurations:" << std::endl;
-                for (unsigned int i = 0; i < result.size(); i++) {
-                    Application::logStream() << " " << result[i] << endl;
-                }
+            // Verbose runs report the result in the log, as they always did
+            // (and keep stdout clean). Otherwise it goes to stdout: scripts
+            // (minimize-ic) read its last line to get the best configuration.
+            std::ostream& out =
+                Application::verboseLevel() > 0 ? Application::logStream()
+                                                : std::cout;
+            out << "Best result configurations:" << std::endl;
+            for (unsigned int i = 0; i < result.size(); i++) {
+                out << " " << result[i] << endl;
             }
             if (options->writeOutBestConfiguration() && result.size() > 0) {
                 dumpConfiguration(dsdb, *options, result[result.size() - 1]);
