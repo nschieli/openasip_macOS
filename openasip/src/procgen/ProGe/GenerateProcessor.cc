@@ -247,9 +247,12 @@ GenerateProcessor::generateProcessor(int argc, char* argv[]) {
                 progeOptions.language, testBenchDir,
                 progeOptions.outputDirectory);
         } catch (const Exception& e) {
-            std::cerr << "Warning: Processor Generator failed to "
+            // The test bench was asked for (-t): failing to produce it is an
+            // error, not a warning, or scripts carry on without it.
+            std::cerr << "Error: Processor Generator failed to "
                       << "generate testbench." << std::endl;
             std::cerr << e.errorMessage() << std::endl;
+            return false;
         }
 
         try {
@@ -259,10 +262,11 @@ GenerateProcessor::generateProcessor(int argc, char* argv[]) {
                 progeOptions.sharedOutputDirectory, testBenchDir,
                 progeOptions.simulationRuntime);
         } catch (const Exception& e) {
-            std::cerr << "Warning: Processor Generator failed to "
+            std::cerr << "Error: Processor Generator failed to "
                       << "generate simulation/compilation scripts."
                       << std::endl;
             std::cerr << e.errorMessage() << std::endl;
+            return false;
         }
     }
 
