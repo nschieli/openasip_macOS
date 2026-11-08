@@ -53,7 +53,7 @@ public:
     virtual ~SimulatorCLI();
 
     virtual void run();
-    virtual void interpreteAndPrintResults(const TCEString& scriptString);
+    virtual bool interpreteAndPrintResults(const TCEString& scriptString);
 
     SimulatorInterpreter& interpreter() { return *interpreter_; }
 protected:

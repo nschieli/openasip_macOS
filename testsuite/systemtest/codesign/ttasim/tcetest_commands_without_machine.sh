@@ -42,5 +42,8 @@ set -u
 IFS=$'\n' # 
 for cmd in $TTASIM_COMMANDS; do
     echo "ttasim --no-debugmode -e \"$cmd; quit;\""
-    ttasim --no-debugmode -e "$cmd; quit;" || echo TROUBLE!!!
+    # A command that needs a machine fails with exit code 1; only a crash
+    # (a signal, exit code above 1) is trouble.
+    ttasim --no-debugmode -e "$cmd; quit;"
+    if [ $? -gt 1 ]; then echo TROUBLE!!!; fi
 done

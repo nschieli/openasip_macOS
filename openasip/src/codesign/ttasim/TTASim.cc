@@ -235,23 +235,34 @@ int main(int argc, char* argv[]) {
         cli->interpreter().processScriptFile(currentDirInitScript);
     }
 
+    // A command that fails in a non-interactive run (-e, or loading the
+    // machine and program given on the command line) makes ttasim exit with
+    // an error instead of reporting success or waiting at the prompt.
+    bool failed = false;
     if (machineToLoad != "") {
-        cli->interpreteAndPrintResults(std::string("mach " ) + machineToLoad);
+        failed |= !cli->interpreteAndPrintResults(
+            std::string("mach " ) + machineToLoad);
     }
 
-    if (programToLoad != "") {
-        cli->interpreteAndPrintResults(std::string("prog " ) + programToLoad);
-        if (scriptString == "") {
+    if (programToLoad != "" && !failed) {
+        failed |= !cli->interpreteAndPrintResults(
+            std::string("prog " ) + programToLoad);
+        if (scriptString == "" && !failed) {
             // by default, if program is given, start simulation immediately
-            cli->interpreteAndPrintResults("run");
+            failed |= !cli->interpreteAndPrintResults("run");
         }
     }
 
-    if (scriptString != "") {
-        cli->interpreteAndPrintResults(scriptString);
+    if (scriptString != "" && !failed) {
+        failed |= !cli->interpreteAndPrintResults(scriptString);
     }
 
-    
+    const bool scripted = scriptString != "" || !options->debugMode();
+    if (failed && scripted) {
+        delete cli;
+        return EXIT_FAILURE;
+    }
+
     if (options->debugMode()) {
         cli->run();
         Application::restoreSignalHandler(SIGINT);

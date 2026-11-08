@@ -171,12 +171,14 @@ SimulatorCLI::~SimulatorCLI() {
  *
  * @param interpreter Interpreter to use.
  * @param scriptString Script string to execute.
+ * @return False if the interpreter reported an error.
  */
-void 
+bool
 SimulatorCLI::interpreteAndPrintResults(const TCEString& scriptString) {
-    interpreter_->interpret(scriptString);
+    bool success = interpreter_->interpret(scriptString);
     if (interpreter_->result().size() > 0)
         std::cout << interpreter_->result() << std::endl;
+    return success;
 }
 
 /**
