@@ -936,27 +936,8 @@ DefaultDecoderGenerator::writeInstructionDecoder(std::ostream& stream) {
         writeGlockMapping(stream);
         stream << endl;
         writePipelineFillProcess(stream);
-
-        int lockReqWidth = glockRequestWidth();
-        stream << indentation(1) << "assign "
-               << NetlistGenerator::DECODER_LOCK_REQ_OUT_PORT << "=";
-        if (lockReqWidth > 0) {
-            for (int i = 0; i < lockReqWidth; i++) {
-                stream << LOCK_REQ_PORT_NAME << "[" << i << "]";
-                if (i+1 < lockReqWidth) {
-                    stream << " | ";
-                }
-            }
-            stream << ";" << endl;
-        } else {
-          stream << "1'b0;" << endl;
-        }
-
-        const int glockWidth = glockPortWidth();
-        stream << indentation(1) << "assign " << GLOCK_PORT_NAME << " = {"
-               << Conversion::toString(glockWidth) << "{"
-               << POST_DECODE_MERGED_GLOCK_SIGNAL << "}};" << endl
-               << endl;
+        // lock_r and glock are driven in writeGlockMapping().
+        stream << endl;
         stream << endl << "endmodule" << endl;
     }
 }
@@ -1742,7 +1723,7 @@ DefaultDecoderGenerator::writeSquashSignalGenerationProcess(
                 }
                 stream << ")" << endl;
                 stream << indentation(indLevel+1) << squashSignal(bus.name())
-                       << " <= 1'b1;" << endl;
+                       << " = 1'b1;" << endl;
             }
 
             if (ifClauseStarted) {
@@ -1773,17 +1754,17 @@ DefaultDecoderGenerator::writeSquashSignalGenerationProcess(
                     stream << indentation(indLevel) << enc.encoding() << " :"
                            << endl;
                     stream << indentation(indLevel + 1)
-                           << squashSignal(slot.name()) << " <= 1'b1;"
+                           << squashSignal(slot.name()) << " = 1'b1;"
                            << endl;
                 }
 
                 stream << indentation(indLevel) << "default:" << endl;
                 stream << indentation(indLevel + 1)
-                       << squashSignal(slot.name()) << " <= 1'b0;" << endl;
+                       << squashSignal(slot.name()) << " = 1'b0;" << endl;
                 stream << indentation(indLevel - 1) << "endcase" << endl;
             } else {
                 string squashName = squashSignal(bus.name());
-                stream << indentation(indLevel) << squashName << " <= 1'b0;"
+                stream << indentation(indLevel) << squashName << " = 1'b0;"
                        << endl;
             }
             stream << indentation(1) << "end" << endl << endl;
@@ -2515,8 +2496,8 @@ DefaultDecoderGenerator::writeGlockMapping(std::ostream& stream) const {
     } else { // Verilog
         string propagateGlock(
             POST_DECODE_MERGED_GLOCK_OUTREG +
-            " = " + POST_DECODE_MERGED_GLOCK_SIGNAL + ";");
-        string assertGlock(POST_DECODE_MERGED_GLOCK_OUTREG + " = '1" + ";");
+            " <= " + POST_DECODE_MERGED_GLOCK_SIGNAL + ";");
+        string assertGlock(POST_DECODE_MERGED_GLOCK_OUTREG + " <= '1" + ";");
 
         if (syncReset_) {
             assert(false && "synch reset not yet implemented in Verilog.");
