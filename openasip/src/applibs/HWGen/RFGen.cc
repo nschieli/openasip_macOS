@@ -31,6 +31,7 @@
 */
 
 #include "RFGen.hh"
+#include "GeneratedModuleFile.hh"
 #include <fstream>
 #include "ProGeTools.hh"
 #include "FileSystem.hh"
@@ -88,19 +89,7 @@ RFGen::createRFHeaderComment() {
  */
 void
 RFGen::createImplementationFiles() {
-    if (options_.language == ProGe::HDL::VHDL) {
-        Path dir = Path(options_.outputDirectory) / "vhdl";
-        FileSystem::createDirectory(dir.string());
-        Path file = dir / (rf_.name() + ".vhd");
-        std::ofstream ofs(file);
-        rf_.implement(ofs, Language::VHDL);
-    } else if (options_.language == ProGe::HDL::Verilog) {
-        Path dir = Path(options_.outputDirectory) / "verilog";
-        FileSystem::createDirectory(dir.string());
-        Path file = dir / (rf_.name() + ".v");
-        std::ofstream ofs(file);
-        rf_.implement(ofs, Language::Verilog);
-    }
+    HWGenTools::writeGeneratedModule(rf_, options_, netlistBlock_);
 
 }
 

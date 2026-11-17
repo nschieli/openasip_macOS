@@ -94,7 +94,7 @@ private:
     TTAMachine::RegisterFile* adfRF_;
 
     std::string moduleName_;
-    ProGe::NetlistBlock* netlistBlock_;
+    ProGe::NetlistBlock* netlistBlock_ = nullptr;
 
     HDLGenerator::Behaviour behaviour_;
 

@@ -31,6 +31,7 @@
  */
 
 #include "FUGen.hh"
+#include "GeneratedModuleFile.hh"
 
 #include <regex>
 
@@ -325,7 +326,12 @@ FUGen::copyImplementation(
     std::string file, std::string format, bool isSynthesizable) {
     file = findAbsolutePath(file);
     const std::string DS = FileSystem::DIRECTORY_SEPARATOR;
-    std::string dir = options_.outputDirectory + DS;
+    // Operation resources are HDB files with fixed module names, so in a
+    // multi-core design they must exist once, in the shared directory.
+    std::string dir = (HWGenTools::usesSharedDirectory(options_)
+                              ? options_.sharedOutputDirectory
+                              : options_.outputDirectory) +
+                      DS;
     if (isSynthesizable) {
         dir += format == "VHDL" ? "vhdl" : "verilog";
     } else {
@@ -345,25 +351,7 @@ FUGen::copyImplementation(
  */
 void
 FUGen::createImplementationFiles() {
-    if (options_.language == ProGe::HDL::VHDL) {
-        Path dir = Path(options_.outputDirectory) / std::string("vhdl");
-        FileSystem::createDirectory(dir.string());
-        Path file = dir / (fu_.name() + ".vhd");
-        std::ofstream ofs(file);
-        fu_.implement(ofs, Language::VHDL);
-    } else if (options_.language == ProGe::HDL::Verilog) {
-        Path dir = Path(options_.outputDirectory) / std::string("verilog");
-        FileSystem::createDirectory(dir.string());
-        Path file = dir / (fu_.name() + ".v");
-        std::ofstream ofs(file);
-        fu_.implement(ofs, Language::Verilog);
-    } else if (options_.language == ProGe::HDL::SV) {  // SV
-        Path dir = Path(options_.outputDirectory) / "systemverilog";
-        FileSystem::createDirectory(dir.string());
-        Path file = dir / (fu_.name() + ".sv");
-        std::ofstream ofs(file);
-        fu_.implement(ofs, Language::Verilog);
-    }
+    HWGenTools::writeGeneratedModule(fu_, options_, netlistBlock_);
 
     // Copy synthesis files and simulation models.
     for (auto&& opInfo : fug_.operations()) {

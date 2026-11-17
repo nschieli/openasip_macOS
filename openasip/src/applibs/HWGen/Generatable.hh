@@ -237,6 +237,7 @@ namespace HDLGenerator {
         }
 
         const std::string& name() const noexcept { return name_; }
+        void setName(const std::string& name) { name_ = name; }
 
         void setParent(Generatable* parent) noexcept { parent_ = parent; }
         Generatable* parent() const noexcept { return parent_; }

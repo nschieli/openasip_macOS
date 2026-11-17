@@ -242,7 +242,7 @@ private:
     std::vector<std::string> operations_;
     int opcodeWidth_;
     std::string moduleName_;
-    ProGe::NetlistBlock* netlistBlock_;
+    ProGe::NetlistBlock* netlistBlock_ = nullptr;
 
     // key = operation name
     std::unordered_map<std::string, BaseOperation> baseOperations_;
