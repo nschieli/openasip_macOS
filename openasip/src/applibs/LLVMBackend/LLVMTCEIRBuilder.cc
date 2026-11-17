@@ -358,9 +358,10 @@ LLVMTCEIRBuilder::buildTCECFG(llvm::MachineFunction& mf) {
                 continue;
             }
 
-            // Put all instances of inline asm blocks to own BB.
+            // Put all instances of inline asm blocks (and compiler
+            // barriers) to own BB.
             // Split BB if there is instructions already added to BB.
-            if (isInlineAsm(*j)) {
+            if (isOwnBasicBlock(*j)) {
                 // TODO check if inline asm does not have any instructions?
                 // Split BB before the inline asm unless first instruction in
                 // BB.
@@ -399,7 +400,7 @@ LLVMTCEIRBuilder::buildTCECFG(llvm::MachineFunction& mf) {
             // Put all instances of INLINEASM nodes to own BB.
             // This one "closes" inline asm BB and creates new BB for rest
             // of the instructions or next inline asm block.
-            if (isInlineAsm(*j)) {
+            if (isOwnBasicBlock(*j)) {
                 // New BB after inline asm.
                 MachineBasicBlock::const_iterator afterInlineAsm = j;
                 ++afterInlineAsm;
@@ -562,12 +563,22 @@ LLVMTCEIRBuilder::buildTCECFG(llvm::MachineFunction& mf) {
                 continue;
             }
 
-            if (isInlineAsm(*j)) {
+            if (isOwnBasicBlock(*j)) {
                 if (AssocTools::containsKey(ftSuccsToInlineAsm, bbn)) {
                     bbn = ftSuccsToInlineAsm[bbn];
                     bb = &bbn->basicBlock();
                 }
-                emitInlineAsm(mf, &*j, bb, *irm);
+                if (isInlineAsm(*j)) {
+                    emitInlineAsm(mf, &*j, bb, *irm);
+                }
+                // A compiler barrier (an empty inline asm such as
+                // `asm volatile("" ::: "memory")`, or a lowered fence) has
+                // a basic block of its own, whose boundaries keep memory
+                // accesses on their side. A basic block may not be empty:
+                // hold it with one empty instruction.
+                if (bb->instructionCount() == 0) {
+                    bb->add(new TTAProgram::Instruction());
+                }
                 bbn->setScheduled(true);
                 if (AssocTools::containsKey(inlineAsmSuccs, bbn)) {
                     bbn = inlineAsmSuccs[bbn];
@@ -1083,6 +1094,12 @@ LLVMTCEIRBuilder::isRealInstruction(const MachineInstr& instr) const {
         return true;
     }
 
+    // A compiler barrier emits no operation, but it must stay in the
+    // program as a scheduling boundary.
+    if (isCompilerBarrier(instr)) {
+        return true;
+    }
+
     // when the -g option turn on, this will come up opc with this, therefore
     // add this to ignore however, it is uncertain whether the debug "-g" will
     // generate more opc, need to verify
@@ -1109,6 +1126,34 @@ LLVMTCEIRBuilder::isRealInstruction(const MachineInstr& instr) const {
         }
     }
     return true;
+}
+
+/**
+ * Tells whether the instruction is a compiler barrier: a MEMBARRIER (a
+ * lowered fence) or an inline asm block with no code in it, such as
+ * `asm volatile("" ::: "memory")`. Neither emits any operation.
+ */
+bool
+LLVMTCEIRBuilder::isCompilerBarrier(const MachineInstr& instr) const {
+    if (instr.getOpcode() == TargetOpcode::MEMBARRIER) {
+        return true;
+    }
+    if (!instr.isInlineAsm()) {
+        return false;
+    }
+    std::string asmStr(
+        instr.getOperand(InlineAsm::MIOp_AsmString).getSymbolName());
+    return asmStr.find_first_not_of(" \t\n\r") == std::string::npos;
+}
+
+/**
+ * Tells whether the instruction is put to a basic block of its own: an
+ * inline asm block, or a compiler barrier. The basic block boundaries keep
+ * the scheduler from moving other instructions across it.
+ */
+bool
+LLVMTCEIRBuilder::isOwnBasicBlock(const MachineInstr& instr) const {
+    return isInlineAsm(instr) || isCompilerBarrier(instr);
 }
 
 bool 

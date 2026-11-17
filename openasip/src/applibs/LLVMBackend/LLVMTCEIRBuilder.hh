@@ -132,6 +132,8 @@ namespace llvm {
 
         bool isHotFunction(llvm::MachineFunction& mf) const;
         bool isRealInstruction(const MachineInstr& instr) const;
+        bool isCompilerBarrier(const MachineInstr& instr) const;
+        bool isOwnBasicBlock(const MachineInstr& instr) const;
         bool hasRealInstructions(
             MachineBasicBlock::const_iterator i, 
             const MachineBasicBlock& mbb);

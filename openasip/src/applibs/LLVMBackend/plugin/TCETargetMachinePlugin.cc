@@ -397,6 +397,9 @@ GeneratedTCEPlugin::operationName(unsigned opc) const {
     if (opc == TCE::DBG_LABEL) return DEBUG_LABEL;
     if (opc == TCE::DBG_VALUE_LIST) return DEBUG_VALUE_LIST;
     if (opc == TCE::DBG_PHI) return DEBUG_PHI;
+    // A compiler barrier (a lowered fence): no operation, only a
+    // scheduling boundary.
+    if (opc == TCE::MEMBARRIER) return "MEMBARRIER";
     // Moves
     if (opc == TCE::COPY) return MOVE;
     if (opc == TCE::MOVI1rr) return MOVE;

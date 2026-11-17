@@ -607,6 +607,10 @@ TCETargetLowering::TCETargetLowering(
     setOperationAction(ISD::ConstantPool , DEFAULT_TYPE, Custom);
 
     setOperationAction(ISD::TRAP, MVT::Other, Custom);
+    // The load-store units complete memory accesses in program order, so
+    // a fence needs no instruction: it is lowered to a compiler barrier
+    // that only keeps the scheduler from moving accesses across it.
+    setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Custom);
 
 // TODO: define TCE instruction for leading/trailing zero count
     setOperationAction(ISD::CTLZ, DEFAULT_TYPE, Expand);
@@ -1708,6 +1712,9 @@ SDValue
 TCETargetLowering::LowerOperation(SDValue op, SelectionDAG& dag) const {
     switch(op.getOpcode()) {
     case ISD::TRAP: return LowerTRAP(op, dag);
+    case ISD::ATOMIC_FENCE:
+        return dag.getNode(
+            ISD::MEMBARRIER, SDLoc(op), MVT::Other, op.getOperand(0));
     case ISD::GlobalAddress: return LowerGLOBALADDRESS(op, dag);
     case ISD::BlockAddress: return LowerBlockAddress(op, dag);
     case ISD::VASTART: return LowerVASTART(op, dag);
