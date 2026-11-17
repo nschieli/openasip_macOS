@@ -75,14 +75,19 @@ module testbench
   assign imem_data = {IMEMWIDTHINMAUS*IMEMMAUWIDTH{1'b0}};
   assign imem_addr = {IMEMADDRWIDTH{1'b0}};
 
+  // The run time: a +SIMTIME=<ns> plusarg (iverilog_simulate.sh -r passes
+  // one) overrides RUNTIME, the SIMTIME compiled in by iverilog_compile.sh,
+  // as in the main test bench.
+  integer simtime;
   initial
   begin
+    if (!$value$plusargs("SIMTIME=%d", simtime))
+      simtime = RUNTIME;
     rst_x=1'b0;
     #(PERIOD*3);
     rst_x=1'b1;
-    // Test runs until RUNTIME, which is equal to SIMTIME given by 
-    // iverilog_compile script. Reduced by 20ns to match vhdl simulation time.
-    #(RUNTIME-20);
+    // Reduced by 20ns to match vhdl simulation time.
+    #(simtime-20);
     $finish;
   end
   
