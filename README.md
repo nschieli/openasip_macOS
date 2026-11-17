@@ -123,6 +123,32 @@ toolchain and all four wxWidgets GUIs build, install and run.
 The following installation steps install prerequisities, the OpenASIP-patched
 LLVM and OpenASIP to in `$HOME/local`.
 
+Using a Prebuilt Release
+========================
+
+The release archives (`openasip-linux-x86_64.tar.gz`,
+`openasip-macos-arm64.tar.gz`) hold a complete, relocatable prefix. Unpack one
+anywhere and run `source local/env.sh`.
+
+There is one requirement beyond the runtime libraries. For every new machine
+(ADF), the C compilers `tcecc` and `oacc` build a compiler plugin from source
+on first use, with the host C++ compiler, against the prefix's headers, and
+those headers include Xerces-C++. The host therefore needs:
+
+- a C++ compiler: `g++` on Linux, the Xcode command line tools on macOS;
+- the Xerces-C++ development headers:
+
+| System | Package |
+|---|---|
+| Debian, Ubuntu | `libxerces-c-dev` |
+| Fedora | `xerces-c-devel` |
+| macOS (Homebrew) | `xerces-c` |
+
+If either is missing, the first compile for a machine fails with
+"Failed to build compiler plugin for target architecture", followed by a line
+naming the missing piece. The plugins are cached in `~/.cache/openasip`, so
+each machine pays the cost of building one only once.
+
 Installing Prerequisities
 =========================
 
