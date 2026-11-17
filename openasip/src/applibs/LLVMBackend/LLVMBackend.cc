@@ -848,6 +848,51 @@ LLVMBackend::compile(
 /**
  * Creates TCETargetMachinePlugin for target architecture.
  */
+namespace {
+
+/**
+ * Explains a failed compiler plugin build when the cause is the host.
+ *
+ * The plugin is compiled from source on first use for each machine, with
+ * the C++ compiler found at configure time and against the installed
+ * headers. Those include Conversion.hh, which includes the Xerces-C++
+ * headers, so a prebuilt installation needs a C++ compiler and the Xerces-C++
+ * development headers on the host that runs it. Their absence shows up as a
+ * bare compiler error, so check both and say which one is missing.
+ *
+ * @param compiler The compiler command.
+ * @param includeFlags The include flags of the plugin build.
+ * @param tempDir A directory for the probe file.
+ * @return A hint to put in the error message, or "" if neither is the cause.
+ */
+std::string
+pluginBuildHostHint(
+    const std::string& compiler, const std::string& includeFlags,
+    const std::string& tempDir) {
+
+    if (system((compiler + " --version > /dev/null 2>&1").c_str()) != 0) {
+        return "The C++ compiler used to build the plugin, '" + compiler +
+            "', could not be run. Install it (for example g++ or "
+            "clang++) and retry.\n";
+    }
+    std::string probe =
+        tempDir + FileSystem::DIRECTORY_SEPARATOR + "xerces_probe.cc";
+    std::ofstream(probe) << "#include <xercesc/util/XMLString.hpp>\n";
+    int ret = system(
+        (compiler + " " + includeFlags + " -E " + probe +
+         " > /dev/null 2>&1").c_str());
+    FileSystem::removeFileOrDirectory(probe);
+    if (ret != 0) {
+        return "The Xerces-C++ development headers were not found. The "
+            "plugin is built on first use for each machine, and needs them "
+            "(Debian/Ubuntu: libxerces-c-dev, Fedora: xerces-c-devel, "
+            "macOS Homebrew: xerces-c). Install them and retry.\n";
+    }
+    return "";
+}
+
+}  // namespace
+
 TCETargetMachinePlugin*
 LLVMBackend::createPlugin() {
     assert(mach_ != NULL && "Machine not set, forgot to call setMachine()?");
@@ -1111,8 +1156,12 @@ LLVMBackend::createPlugin() {
     }
     ret = system(cmd.c_str());
     if (ret) {
+        std::string includeFlags = pluginIncludeFlags + " " +
+            Application::relocatedPath(LLVM_CPPFLAGS) + " " +
+            Application::relocatedPath(CONFIGURE_CPPFLAGS);
         std::string msg = std::string() +
             "Failed to build compiler plugin for target architecture.\n" +
+            pluginBuildHostHint(CXX, includeFlags, tempDir_) +
             "Failed command was: " + cmd;
 
         throw CompileError(__FILE__, __LINE__, __func__, msg);
