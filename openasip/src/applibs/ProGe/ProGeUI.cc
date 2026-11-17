@@ -441,8 +441,14 @@ ProGeUI::generateTestBench(
             generator_.generatorContext(), generator_.processorTopLevel());
         coreTestbench.write(Path(progeOutDir), language);
     } catch (Exception& e) {
-        // There is one case the new test bench can not handle: same data
-        // address spaces shared by two LSUs.
+        // The new test bench can not handle every machine: e.g. a data
+        // address space shared by two LSUs, or a function unit with its own
+        // data memory port. Fall back to the legacy test bench, but say so:
+        // the two differ (the legacy one has no instruction-count stop), and
+        // a user who does not know which one was written can not tell why.
+        std::cerr << "Warning: the test bench generator could not handle "
+                  << "this processor (" << e.errorMessage() << "); writing "
+                  << "the legacy test bench instead." << std::endl;
         ProGeTestBenchGenerator tbGen = ProGeTestBenchGenerator();
         tbGen.generate(
             language, *machine_, *idf_, dstDir, progeOutDir, entityName_);
