@@ -85,6 +85,7 @@ public:
         const std::string& portName,
         bool partialMatch = true);
 
+    using BaseNetlistBlock::setModuleName;
     using BaseNetlistBlock::addSubBlock;
     using BaseNetlistBlock::subBlockCount;
     NetlistBlock& subBlock(size_t index) override;

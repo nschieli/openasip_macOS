@@ -124,10 +124,19 @@ BlockSourceCopier::copyShared(const std::string& dstDirectory) {
 
     const string DS = FileSystem::DIRECTORY_SEPARATOR;
     string sourceDir = Environment::dataDirPath("ProGe");
-    // copy the utility VHDL or Verilog files
+    // copy the utility VHDL or Verilog files. The directory may not exist
+    // yet: when every FU and RF is generated, no HDB file was copied.
+    string utilityDir =
+        dstDirectory + DS + ((language_ == VHDL) ? "vhdl" : "verilog");
+    if (!FileSystem::fileExists(utilityDir) &&
+        !FileSystem::createDirectory(utilityDir)) {
+        throw IOException(
+            __FILE__, __LINE__, __func__,
+            "Unable to create directory " + utilityDir + ".");
+    }
     FileSystem::copy(
         sourceDir + DS + ((language_==VHDL)?UTILITY_VHDL_FILE:UTILITY_VERILOG_FILE),
-        dstDirectory + DS + ((language_==VHDL)?"vhdl":"verilog") + DS + ((language_==VHDL)?UTILITY_VHDL_FILE:UTILITY_VERILOG_FILE));
+        utilityDir + DS + ((language_==VHDL)?UTILITY_VHDL_FILE:UTILITY_VERILOG_FILE));
 }
 
 /**

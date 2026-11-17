@@ -1,5 +1,5 @@
 noinst_LTLIBRARIES = libhwgen.la
-libhwgen_la_SOURCES = FUGen.cc RFGen.cc HDLGenerator.cc LHSValue.cc TrackerGen.cc
+libhwgen_la_SOURCES = FUGen.cc RFGen.cc GeneratedModuleFile.cc HDLGenerator.cc LHSValue.cc TrackerGen.cc
 
 
 SRC_ROOT_DIR = $(top_srcdir)/src
@@ -44,5 +44,5 @@ MAINTAINERCLEANFILES = *~ *.gcov *.bbg *.bb *.da
 libhwgen_la_SOURCES += \
 	FUGen.hh RFGen.hh HDLGenerator.hh HWGenTools.hh HDLRegister.hh \
 	HDLPort.hh LHSValue.hh Generatable.hh WidthTransformations.hh TrackerGen.hh\
-	BinaryOps.hh CoproCusops.hh
+	BinaryOps.hh CoproCusops.hh GeneratedModuleFile.hh
 ## headers end
