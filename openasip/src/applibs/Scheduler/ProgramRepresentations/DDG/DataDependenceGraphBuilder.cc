@@ -1613,15 +1613,19 @@ DataDependenceGraphBuilder::createTriggerDependencies(
 
         // remove old same op from bookkeeping.
         // this should prevent exponential explosion of edge count.
+        // Only an old op that the new one got an edge from may go: an
+        // op always on a different FU got no edge, so later ops on its
+        // FU still need the edge from it.
         if (dop.hasSideEffects() && moveNode.move().isUnconditional()) {
-            for (MoveNodeUseSet::iterator iter =
-                     currentBB_->basicBlock().liveRangeData_->fuDeps_.begin();
-                 iter != currentBB_->basicBlock().liveRangeData_->fuDeps_.end(); iter++) {
+            MoveNodeUseSet& fuDeps =
+                currentBB_->basicBlock().liveRangeData_->fuDeps_;
+            for (MoveNodeUseSet::iterator iter = fuDeps.begin();
+                 iter != fuDeps.end(); iter++) {
 
-                const Operation& o = 
+                const Operation& o =
                     iter->mn()->destinationOperation().operation();
-                if (&o == &dop) {
-                    currentBB_->basicBlock().liveRangeData_->fuDeps_.erase(iter);
+                if (&o == &dop && !isAlwaysDifferentFU(&moveNode, iter->mn())) {
+                    fuDeps.erase(iter);
                     break;
                 }
             }
