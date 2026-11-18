@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<osal version="0.1">
+
+  <operation>
+    <name>ACCWR</name>
+    <description>Writes input 2 into entry (input 1 mod 8) of the
+state of the function unit.</description>
+    <inputs>2</inputs>
+    <outputs>0</outputs>
+    <side-effects/>
+    <affected-by>
+      <operation name="ACCWR"/>
+      <operation name="ACCSUM"/>
+      <operation name="ACCRD"/>
+    </affected-by>
+    <affects>
+      <operation name="ACCWR"/>
+      <operation name="ACCSUM"/>
+      <operation name="ACCRD"/>
+    </affects>
+    <in element-count="1" element-width="32" id="1" type="UIntWord"/>
+    <in element-count="1" element-width="32" id="2" type="UIntWord"/>
+  </operation>
+
+  <operation>
+    <name>ACCSUM</name>
+    <description>Folds the first (input 1) state entries into a
+checksum kept in the state.</description>
+    <inputs>1</inputs>
+    <outputs>0</outputs>
+    <side-effects/>
+    <affected-by>
+      <operation name="ACCWR"/>
+      <operation name="ACCSUM"/>
+      <operation name="ACCRD"/>
+    </affected-by>
+    <affects>
+      <operation name="ACCWR"/>
+      <operation name="ACCSUM"/>
+      <operation name="ACCRD"/>
+    </affects>
+    <in element-count="1" element-width="32" id="1" type="UIntWord"/>
+  </operation>
+
+  <operation>
+    <name>ACCRD</name>
+    <description>Returns the checksum computed by the last ACCSUM.
+The input is ignored.</description>
+    <inputs>1</inputs>
+    <outputs>1</outputs>
+    <side-effects/>
+    <affected-by>
+      <operation name="ACCWR"/>
+      <operation name="ACCSUM"/>
+      <operation name="ACCRD"/>
+    </affected-by>
+    <affects>
+      <operation name="ACCWR"/>
+      <operation name="ACCSUM"/>
+      <operation name="ACCRD"/>
+    </affects>
+    <in element-count="1" element-width="32" id="1" type="UIntWord"/>
+    <out element-count="1" element-width="32" id="2" type="UIntWord"/>
+  </operation>
+
+</osal>
