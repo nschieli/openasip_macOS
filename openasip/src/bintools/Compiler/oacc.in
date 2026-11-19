@@ -558,11 +558,18 @@ def processInputFiles(inFiles, tmpDir, options, tceopsDir=None):
                         sys.stderr.write("\r  [%d/%d] compiled" %
                                          (completed, numCompileTasks))
                         sys.stderr.flush()
-                    linkList.append(outFileName)
             except KeyboardInterrupt:
                 for f in futures:
                     f.cancel()
                 raise
+        # ⛔ LINK IN COMMAND-LINE ORDER, NOT IN COMPLETION ORDER. The link
+        #    order decides where each procedure lands in the program, so
+        #    appending each object as its job finished made two identical
+        #    oacc runs produce different binaries (same code, procedures in a
+        #    different order) whenever several files were compiled.
+        # ⇒ The parallel path must link exactly what the sequential path
+        #   (-j 1) links: compileTasks' order.
+        linkList.extend(outFn for _, outFn, _ in compileTasks)
         if not verbose and showProgress:
             # terminates the \r-updated progress line
             sys.stderr.write("\n")
