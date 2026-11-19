@@ -1155,10 +1155,22 @@ LLVMTCEBuilder::doFinalization(Module& /* m */) {
         endReferences_[i]->setSource(ea);
     }
 
-    for (DataMemIndex::const_iterator i = dmemIndex_.begin(); 
-         i != dmemIndex_.end(); ++i) {
-        prog_->addDataMemory((*i).second);
+    // Add the data memories in the machine's address-space order. dmemIndex_
+    // is keyed by AddressSpace pointer, so iterating it gives heap-address
+    // order, which varies with the environment (e.g. the build path), and
+    // with it the order of the address spaces in the written TPEF.
+    const TTAMachine::Machine::AddressSpaceNavigator& asNav =
+        mach_->addressSpaceNavigator();
+    size_t added = 0;
+    for (int i = 0; i < asNav.count(); i++) {
+        DataMemIndex::const_iterator d = dmemIndex_.find(asNav.item(i));
+        if (d != dmemIndex_.end()) {
+            prog_->addDataMemory(d->second);
+            added++;
+        }
     }
+    assert(added == dmemIndex_.size() &&
+           "data memory of an address space not in the machine");
     
     // Fix references to basic blocks.
     std::map<TTAProgram::TerminalInstructionAddress*,
