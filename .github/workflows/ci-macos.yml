@@ -7,24 +7,40 @@ name: Build and Test (macOS arm64)
 # It certifies the thing this fork exists for: that OpenASIP builds and self-tests
 # on Apple Silicon from a clean checkout, with no developer machine's state.
 
-# ⛔⛔ TAGS AND MANUAL DISPATCH ONLY — macOS MINUTES ARE BILLED ON PUBLIC REPOS
-#     TOO. Measured 2026-09-19: 26 macOS jobs since 1 September, 863 minutes,
-#     roughly $54-69 of a bill that crossed $100. The free allowance for public
-#     repositories covers standard LINUX runners; macOS is excluded.
-# ⚠ THE OLD GATE BELIEVED THE OPPOSITE AND SAID SO IN ITS OWN COMMENT — "free on
-#   public ones" — so going public did not make this free, it made it
-#   UNCONDITIONAL: every push to main and every PR, at ~33 minutes a build.
-# ⇒ NS, 2026-09-19: "anything long can be run on my local macOS machine and for
-#   Linux we can run on the linux box. When we are reasonably sure things will
-#   work, we can push it there." A tag is that moment; a push is not.
+# ⭐ macOS IS FIRST-CLASS IN CI (NS, 2026-11-21: "the repo exists to add
+#   macOS"). It runs on every pull request, every push to main, a weekly
+#   schedule and on demand, so a broken macOS build, or a retired runner
+#   image (macos-14 was retired unnoticed until the v0.3.0 tag run failed in
+#   1 s), shows up within a week instead of at release time.
+# ⚠ HISTORY: until 2026-11-21 this ran on tags and dispatch only, because
+#   macOS minutes were measured as billed (2026-09-19: 26 jobs, 863 minutes,
+#   roughly $54-69). NS reversed that on 2026-11-21. Watch the billing page.
+# ⛔ ONLY A TAG PUBLISHES: the release steps below keep
+#   `if: startsWith(github.ref, 'refs/tags/')`, so a PR, main, schedule or
+#   dispatch run builds and self-tests and never touches a release.
 on:
   push:
+    branches:
+      - main
     # A tag builds and PUBLISHES a release. Downstream (Homebrew, the product
     # package) needs a URL that does not expire; a workflow artifact does, in
     # 30 days.
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # weekly, Monday 06:17 UTC: catches a retired runner image or a broken
+    # dependency on the image even in a week with no pushes
+    - cron: '17 6 * * 1'
   workflow_dispatch:
+
+# A newer push to the same PR cancels its older macOS run. main and tags are
+# never cancelled: each commit and each tag keeps its own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-macos:
