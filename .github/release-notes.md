@@ -1,27 +1,21 @@
-OpenASIP toolchain for Linux x86_64 and macOS on Apple Silicon (arm64),
-each built and self-tested by CI from a clean checkout.
+OpenASIP toolchain for **Linux x86_64** and **macOS on Apple Silicon (arm64)**, built and self-tested by CI from a clean checkout.
 
-Each archive expands to a `local/` prefix containing OpenASIP and the
-patched LLVM it requires. `local/BUILD-INFO` records the commit, the
-run and the runner.
+Each archive expands to a `local/` prefix containing OpenASIP and the patched LLVM it requires. `local/BUILD-INFO` records the commit, the run and the runner.
 
-Licensed LGPL v2.1. The corresponding source is this repository at the
-commit named in BUILD-INFO.
+Licensed LGPL v2.1. The corresponding source is this repository at the commit named in BUILD-INFO.
 
-## Linux x86_64 (Ubuntu 24.04 LTS, stock)
-
-Verify, extract, and put it on PATH by sourcing the env.sh inside it,
-which resolves paths from its own location:
+## Linux x86_64 (built on Ubuntu 24.04 LTS, stock)
 
     sha256sum -c openasip-linux-x86_64.tar.gz.sha256
     tar -xzf openasip-linux-x86_64.tar.gz
     . local/env.sh
 
+`env.sh` puts the tools on PATH and resolves paths from its own location.
+
 ## macOS arm64
 
-Verify:
-
     shasum -a 256 -c openasip-macos-arm64.tar.gz.sha256
+    tar -xzf openasip-macos-arm64.tar.gz
 
 ### Extract from a terminal, not by double-clicking
 
