@@ -28,10 +28,15 @@ on:
 
 jobs:
   build-macos:
-    # macos-14 is the first Apple Silicon image and is what the port targets.
-    # Pinned rather than macos-latest so a runner-image bump cannot silently
-    # change what "certified on macOS" means.
-    runs-on: macos-14
+    # Apple Silicon (arm64), what the port targets. Pinned rather than
+    # macos-latest so a runner-image bump cannot silently change what
+    # "certified on macOS" means.
+    # ⚠ A PINNED IMAGE IS RETIRED EVENTUALLY: macos-14 was, and the v0.3.0
+    #   tag run was cancelled in 1 s ("The configuration
+    #   'macos-14-arm64-us-default' is not supported"). Bump the pin here
+    #   when that happens, and prove it with a workflow_dispatch on the
+    #   branch (no publish: that step needs a tag ref).
+    runs-on: macos-15
 
     # Only the release step needs this; scoped at the job because that is the
     # smallest unit GitHub allows.
