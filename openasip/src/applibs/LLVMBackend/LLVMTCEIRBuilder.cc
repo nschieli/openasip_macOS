@@ -364,8 +364,15 @@ LLVMTCEIRBuilder::buildTCECFG(llvm::MachineFunction& mf) {
             if (isOwnBasicBlock(*j)) {
                 // TODO check if inline asm does not have any instructions?
                 // Split BB before the inline asm unless first instruction in
-                // BB.
-                if (realInstructionCount > 0 && !lastInstrWasInlineAsm) {
+                // BB. When a call or a conditional branch has just ended the
+                // previous BB (newBB), the BB created for the code after it
+                // is still empty and not on the CFG yet: the inline asm goes
+                // into that one. realInstructionCount still counts the
+                // previous BB's instructions there, and splitting again left
+                // the empty BB off the CFG, so connecting the call or branch
+                // to it asserted ("head node not on the graph").
+                if (!newBB && realInstructionCount > 0 &&
+                    !lastInstrWasInlineAsm) {
                     bb = new TTAProgram::BasicBlock(0);
                     BasicBlockNode* succBBN = new BasicBlockNode(*bb);
                     ftSuccsToInlineAsm[bbn] = succBBN;
