@@ -470,41 +470,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd ${{ github.workspace }}
-          cat > NOTES-linux.md <<'EOF'
-          OpenASIP toolchain for Linux x86_64, built and self-tested by CI from a
-          clean checkout on Ubuntu 24.04 LTS (stock).
-
-          The archive expands to a `local/` prefix containing OpenASIP and the
-          patched LLVM it requires. `local/BUILD-INFO` records the commit, the
-          run and the runner.
-
-          Put it on PATH by sourcing the env.sh inside it, which resolves paths
-          from its own location:
-
-              tar -xzf openasip-linux-x86_64.tar.gz
-              . local/env.sh
-
-          Licensed LGPL v2.1. The corresponding source is this repository at the
-          commit named in BUILD-INFO.
-
-          Verify:
-
-              sha256sum -c openasip-linux-x86_64.tar.gz.sha256
-          EOF
+          # ⛔ ONE NOTES FILE FOR BOTH PLATFORMS, AND AN EDIT AFTER THE UPLOAD. ci.yml and
+          #    ci-macos.yml publish to the same release, and only the first to arrive
+          #    creates it. With per-platform notes, the release showed one platform's
+          #    text only: Linux at v0.3.0, macOS at v0.3.1. Both now write
+          #    .github/release-notes.md, and both `gh release edit` after the upload, so
+          #    the title and notes come out the same whichever job finishes first.
+          #    tools/lint-workflows.py checks the file and both steps.
+          sed "s/@TAG@/${GITHUB_REF_NAME}/" .github/release-notes.md > NOTES.md
           # ⚠ THE TAG NO LONGER NAMES THE UPSTREAM VERSION (NS, 2026-09-19: the
-          #   fork is "arguably less than 1.0.0 of our own"), so the notes must:
-          #   a user downloading this has no other way to tell which OpenASIP
-          #   they are getting, and the old v2.2-macos.N scheme said it in the
-          #   filename.
-          printf '\n---\nRelease %s of the nschieli fork. Tracks upstream OpenASIP 2.2; local/BUILD-INFO names the exact commit.\n' \
-                 "${GITHUB_REF_NAME}" >> NOTES-linux.md
+          #   fork is "arguably less than 1.0.0 of our own"), so the notes' last line
+          #   does: a user downloading this has no other way to tell which OpenASIP
+          #   they are getting.
+          TITLE="OpenASIP toolchain ${GITHUB_REF_NAME} — Linux x86_64 + macOS arm64"
           ASSETS="openasip-linux-x86_64.tar.gz openasip-linux-x86_64.tar.gz.sha256"
-          gh release create "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "OpenASIP toolchain ${GITHUB_REF_NAME} — Linux x86_64 + macOS arm64" \
-            --notes-file NOTES-linux.md \
-            $ASSETS \
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --title "$TITLE" --notes-file NOTES.md $ASSETS \
           || gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber $ASSETS
+          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --title "$TITLE" --notes-file NOTES.md
 
       - name: What this job did and did not cover
         if: always()

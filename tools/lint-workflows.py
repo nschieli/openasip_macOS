@@ -50,11 +50,58 @@ def main() -> int:
                     first = (r.stderr.strip().splitlines() or [f'rc={r.returncode}'])[0]
                     print(f'  ✗  {path} [{job}] {name}')
                     print(f'     {first}')
+    bad += check_release_notes()
     if bad:
-        print(f'\n{bad} broken run: block(s) of {checked}')
+        print(f'\n{bad} problem(s); {checked} run: blocks checked')
         return 1
     print(f'{checked} run: blocks parse')
     return 0
+
+
+NOTES = '.github/release-notes.md'
+ASSETS = ['openasip-linux-x86_64.tar.gz', 'openasip-linux-x86_64.tar.gz.sha256',
+          'openasip-macos-arm64.tar.gz', 'openasip-macos-arm64.tar.gz.sha256']
+
+
+def check_release_notes() -> int:
+    """Both workflows publish to the same release, and only the first to arrive
+    creates it. Each must therefore write the SAME notes file, and `gh release
+    edit` after its upload, so the release reads the same whichever job finishes
+    first. With per-platform notes the release showed only one platform's text
+    (Linux at v0.3.0, macOS at v0.3.1). Returns the number of problems."""
+    bad = 0
+    try:
+        notes = open(NOTES).read()
+    except FileNotFoundError:
+        print(f'  ✗  {NOTES}: not found')
+        return 1
+    for a in ASSETS:
+        if a not in notes:
+            print(f'  ✗  {NOTES}: does not name {a}')
+            bad += 1
+    if notes.count('@TAG@') != 1:
+        print(f'  ✗  {NOTES}: needs exactly one @TAG@ (the release line)')
+        bad += 1
+    titles = set()
+    for path in WORKFLOWS:
+        steps = [s for j in (yaml.safe_load(open(path)).get('jobs') or {}).values()
+                 for s in (j.get('steps') or []) if s.get('name') == 'Publish release']
+        if len(steps) != 1:
+            print(f'  ✗  {path}: {len(steps)} "Publish release" steps, expected 1')
+            bad += 1
+            continue
+        run = steps[0].get('run', '')
+        for need in (NOTES, 'gh release edit', '--notes-file NOTES.md'):
+            if need not in run:
+                print(f'  ✗  {path} Publish release: missing {need!r}')
+                bad += 1
+        titles |= {ln.strip() for ln in run.splitlines() if ln.strip().startswith('TITLE=')}
+    if len(titles) != 1:
+        print(f'  ✗  the two Publish release steps set different titles: {sorted(titles)}')
+        bad += 1
+    if not bad:
+        print(f'release notes: both workflows publish {NOTES} and edit after upload')
+    return bad
 
 
 if __name__ == '__main__':
