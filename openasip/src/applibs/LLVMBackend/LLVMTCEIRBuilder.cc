@@ -364,8 +364,10 @@ LLVMTCEIRBuilder::buildTCECFG(llvm::MachineFunction& mf) {
             if (isOwnBasicBlock(*j)) {
                 // TODO check if inline asm does not have any instructions?
                 // Split BB before the inline asm unless first instruction in
-                // BB.
-                if (realInstructionCount > 0 && !lastInstrWasInlineAsm) {
+                // BB. A BB still waiting for its first instruction (newBB,
+                // e.g. the one after a call) takes the inline asm itself.
+                if (!newBB && realInstructionCount > 0 &&
+                    !lastInstrWasInlineAsm) {
                     bb = new TTAProgram::BasicBlock(0);
                     BasicBlockNode* succBBN = new BasicBlockNode(*bb);
                     ftSuccsToInlineAsm[bbn] = succBBN;
