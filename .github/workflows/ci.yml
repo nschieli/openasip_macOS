@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-    # ⭐ A TAG BUILDS AND PUBLISHES. Verdon consumes the Linux prefix the same
+    # ⭐ A TAG BUILDS AND PUBLISHES. Downstream consumes the Linux prefix the same
     #    way Homebrew consumes the macOS one, and a package needs a URL that
     #    outlives the run: a workflow artifact expires in 30 days.
     tags:
@@ -187,7 +187,7 @@ jobs:
           python3 openasip/tools/scripts/systemtest.py -os -p$(nproc)
 
       # ════════════════════════════════════════════════════════════════════
-      # Packaging for downstream (Verdon), mirroring ci-macos.yml.
+      # Packaging for downstream, mirroring ci-macos.yml.
       #
       # ⭐ AFTER the selftest, unit tests and systemtest, DELIBERATELY. An
       #    artifact survives a failed job, so packaging earlier would publish a
@@ -495,7 +495,7 @@ jobs:
         run: |
           echo "Covered : configure, build, install, oa-selftest, unit tests, systemtest.py, QEMU-OpenASIP (non-blocking), relocatability, and packaging on Ubuntu 24.04 x86_64 from a clean checkout."
           echo "NOT here: macOS/arm64 — see ci-macos.yml."
-          echo "NOT here: the Verdon RTL swap. This artifact is the FORK's toolchain; verdon's own RTL is overlaid downstream by tools/build-product.sh."
+          echo "NOT here: downstream RTL. This artifact is the FORK's toolchain; any product RTL is overlaid downstream."
 
       - name: Dump error logs
         if: failure()

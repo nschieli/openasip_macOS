@@ -102,7 +102,7 @@ fi
 
 say "what the prefix needs from outside itself"
 # ⚠ Homebrew references are EXPECTED here — the open-source prefix is not
-#   vendored; Verdon's installer does that. This is an inventory, not a gate.
+#   vendored; a downstream installer does that. This is an inventory, not a gate.
 ext=$(find "$OA_PREFIX" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) 2>/dev/null \
       | while read -r f; do file -b "$f" | grep -q Mach-O && otool -L "$f" 2>/dev/null | tail -n +2; done \
       | awk '{print $1}' | grep '^/opt/' | sort -u)
