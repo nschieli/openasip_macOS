@@ -287,6 +287,11 @@ begin
           o1shadow_reg <= o1data;
         end if;
 
+        -- The load result pipeline advances only while the core is not locked, like the issue
+        -- stage: with a data memory that is stalled by glock too, the core then reads the
+        -- result of its own load after a lock. (A memory that keeps running during a lock
+        -- needs an LSU that buffers its responses; this unit has no such buffer.)
+        if glock = '0' then
         status_addr_reg(1) <= status_addr_reg(0);
 
         if status_addr_reg(1)(4 downto 2) = LDW then
@@ -334,6 +339,7 @@ begin
             when others =>
               r1_reg <= EXT(data_in(dataw-3*SIZE_OF_BYTE-1 downto dataw-4*SIZE_OF_BYTE), r1_reg'length);
           end case;
+        end if;
         end if;
 
       end if;
