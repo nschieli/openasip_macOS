@@ -275,6 +275,12 @@ addr,mem_en_x,wr_en_x,wr_mask_x,glock,clk,rstx);
         if(o1load ==1)
           o1shadow_reg <= o1data;
 
+        // The load result pipeline advances only while the core is not locked, like the issue
+        // stage: with a data memory that is stalled by glock too, the core then reads the result
+        // of its own load after a lock. (A memory that keeps running during a lock needs an LSU
+        // that buffers its responses; this unit has no such buffer.)
+        if(glock == 0)
+        begin
         status_addr_reg[1] <= status_addr_reg[0];
 
         if(status_addr_reg[1][4 : 2] == LDW)
@@ -315,6 +321,7 @@ addr,mem_en_x,wr_en_x,wr_mask_x,glock,clk,rstx);
              default:
               r1_reg <= $unsigned(data_in[dataw-3*SIZE_OF_BYTE-1 : dataw-4*SIZE_OF_BYTE]);
           endcase
+        end
     end
 
 
